@@ -69,3 +69,7 @@ The headed run answers the window picker with a flag that selects the test's own
 ## Credits
 
 Interface icons are from [Lucide](https://lucide.dev) 0.460.0, ISC licence (`icons/LUCIDE-LICENSE`).
+
+## License
+
+MIT (`LICENSE`).
