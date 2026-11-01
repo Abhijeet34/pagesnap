@@ -9,14 +9,13 @@ function choose() {
 }
 
 async function frameOf(stream) {
-  const video = document.createElement('video');
-  video.muted = true;
-  video.srcObject = stream;
-  await video.play();
-  // The first decoded frame of a fresh capture is often blank.
-  await new Promise((r) => video.requestVideoFrameCallback(() => video.requestVideoFrameCallback(r)));
-  const canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
-  canvas.getContext('2d').drawImage(video, 0, 0);
+  const capture = new ImageCapture(stream.getVideoTracks()[0]);
+  // The first frame of a fresh capture is often blank.
+  (await capture.grabFrame()).close();
+  const bitmap = await capture.grabFrame();
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  canvas.getContext('2d').drawImage(bitmap, 0, 0);
+  bitmap.close();
   return canvas;
 }
 
@@ -26,6 +25,10 @@ try {
     window.close();
   } else {
     status.textContent = 'Capturing…';
+    // Out of the way so a whole-screen capture does not include this window.
+    const self = await chrome.windows.getCurrent();
+    await chrome.windows.update(self.id, { state: 'minimized' });
+    await new Promise((r) => setTimeout(r, 400));
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: streamId, maxWidth: 16384, maxHeight: 16384 } },
@@ -45,4 +48,6 @@ try {
 } catch (e) {
   console.error(e);
   status.textContent = `Capture failed: ${e.message}. On macOS, allow the browser under System Settings > Privacy & Security > Screen Recording.`;
+  const self = await chrome.windows.getCurrent();
+  await chrome.windows.update(self.id, { state: 'normal', focused: true });
 }
