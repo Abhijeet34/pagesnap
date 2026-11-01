@@ -41,13 +41,19 @@ try {
     }
     const blob = await canvas.convertToBlob({ type: 'image/png' });
     const id = await putShot(blob, { mode: 'window', width: canvas.width, height: canvas.height, title: '', url: '' });
-    const target = await chrome.windows.getLastFocused({ windowTypes: ['normal'] });
-    await chrome.tabs.create({ url: `src/viewer.html#${id}`, windowId: target.id });
+    const target = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
+    // With no normal window left, a new one holds the viewer.
+    if (target) await chrome.tabs.create({ url: `src/viewer.html#${id}`, windowId: target.id });
+    else await chrome.windows.create({ url: `src/viewer.html#${id}` });
     window.close();
   }
 } catch (e) {
   console.error(e);
-  status.textContent = `Capture failed: ${e.message}. On macOS, allow the browser under System Settings > Privacy & Security > Screen Recording.`;
+  // Permission errors from getUserMedia are the Screen Recording case.
+  const permission = e?.name === 'NotAllowedError' || e?.name === 'NotReadableError';
+  status.textContent = permission
+    ? 'Capture failed: on macOS, allow the browser under System Settings > Privacy & Security > Screen Recording, then try again.'
+    : `Capture failed: ${e.message}`;
   const self = await chrome.windows.getCurrent();
   await chrome.windows.update(self.id, { state: 'normal', focused: true });
 }

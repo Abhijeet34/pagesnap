@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Full page, scrolling, visible, area and window screenshots.",
   "minimum_chrome_version": "116",
-  "permissions": ["activeTab", "scripting", "debugger", "desktopCapture", "clipboardWrite"],
+  "permissions": ["activeTab", "scripting", "debugger", "desktopCapture", "clipboardWrite", "storage"],
   "background": { "service_worker": "src/background.js", "type": "module" },
   "action": { "default_popup": "src/popup.html", "default_title": "PageSnap" },
   "commands": {

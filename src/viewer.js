@@ -17,11 +17,21 @@ if (!shot) {
     textContent: 'Screenshots are kept for 24 hours. Take a new one from the toolbar.',
   }));
 } else {
-  const stamp = new Date(shot.created);
-  const name = `${(shot.title || 'Screenshot').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 80)} ${stamp.toISOString().slice(0, 19).replace('T', ' ').replaceAll(':', '.')}`;
+  const d = new Date(shot.created);
+  const pad = (n) => String(n).padStart(2, '0');
+  // Local time, as the user reads the clock; ':' is not allowed in filenames.
+  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}.${pad(d.getMinutes())}.${pad(d.getSeconds())}`;
+  // Sliced by code point so an emoji in the title is never split in half.
+  const title = [...(shot.title || 'Screenshot').replace(/[\\/:*?"<>|\u0000-\u001f\u007f]+/g, ' ').trim()].slice(0, 80).join('').replace(/[. ]+$/, '');
+  const name = `${title || 'Screenshot'} ${stamp}`;
   document.title = `Screenshot: ${shot.title || MODES[shot.mode]}`;
   heading.textContent = shot.title || MODES[shot.mode];
-  detail.textContent = `${MODES[shot.mode]} · ${shot.width} × ${shot.height} px · ${(shot.blob.size / 1048576).toFixed(1)} MB`;
+  detail.textContent = [
+    MODES[shot.mode],
+    `${shot.width} × ${shot.height} px`,
+    `${(shot.blob.size / 1048576).toFixed(1)} MB`,
+    shot.note,
+  ].filter(Boolean).join(' · ');
   img.src = URL.createObjectURL(shot.blob);
   img.alt = `${MODES[shot.mode]} screenshot of ${shot.title || shot.url || 'the page'}`;
   img.addEventListener('click', () => img.classList.toggle('actual'));
@@ -42,15 +52,25 @@ if (!shot) {
 
   document.querySelector('.png').addEventListener('click', () => download(shot.blob, 'png'));
 
-  document.querySelector('.jpeg').addEventListener('click', async () => {
-    const bitmap = await createImageBitmap(shot.blob);
-    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-    const ctx = canvas.getContext('2d');
-    // JPEG has no alpha; transparent pixels would otherwise turn black.
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(bitmap, 0, 0);
-    download(await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 }), 'jpg');
+  const jpeg = document.querySelector('.jpeg');
+  jpeg.addEventListener('click', async () => {
+    jpeg.disabled = true;
+    try {
+      const bitmap = await createImageBitmap(shot.blob);
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const ctx = canvas.getContext('2d');
+      // JPEG has no alpha; transparent pixels would otherwise turn black.
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      download(await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 }), 'jpg');
+    } catch (e) {
+      console.error(e);
+      flash(jpeg, 'JPEG failed');
+    } finally {
+      jpeg.disabled = false;
+    }
   });
 
   const copy = document.querySelector('.copy');

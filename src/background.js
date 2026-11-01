@@ -1,4 +1,4 @@
-import { putShot } from './store.js';
+import { armArea, putShot, takeArea } from './store.js';
 
 // captureVisibleTab is limited to 2 calls per second per extension.
 const CAPTURE_GAP_MS = 550;
@@ -9,17 +9,22 @@ const MAX_AREA = 16384 * 16384;
 // taller full-page shots are taken in tiles.
 const MAX_TILE = 16384;
 const MAX_FRAMES = 200;
+const MODES = ['visible', 'full', 'scroll', 'area', 'window'];
+const EXTENSION_ORIGIN = chrome.runtime.getURL('');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Two captures on one tab would scroll it against each other.
 const busy = new Set();
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === 'capture') {
+  if (sender.id !== chrome.runtime.id) return;
+  // Capture requests come only from the extension's own popup; a content
+  // script, which shares a process with the web page, cannot start one.
+  if (msg?.type === 'capture' && !sender.tab && sender.url?.startsWith(EXTENSION_ORIGIN)) {
     run(msg.mode, msg.tabId).then(() => sendResponse({ ok: true }), (e) => sendResponse({ error: fail(e) }));
     return true;
   }
-  if (msg.type === 'area-selected' && sender.tab) {
+  if (msg?.type === 'area-selected' && sender.tab && sender.frameId === 0) {
     captureArea(sender.tab, msg.rect, msg.viewportWidth).catch(fail);
     // Answer so the sender's promise settles instead of rejecting on a closed port.
     sendResponse({});
@@ -47,6 +52,7 @@ function clearError() {
 }
 
 async function run(mode, tabId) {
+  if (!MODES.includes(mode)) throw new Error(`Unknown capture mode: ${mode}`);
   clearError();
   if (mode === 'window') {
     await chrome.windows.create({ url: 'src/window.html', type: 'popup', width: 440, height: 300 });
@@ -54,27 +60,50 @@ async function run(mode, tabId) {
   }
   const tab = await chrome.tabs.get(tabId);
   if (mode === 'area') {
+    await armArea(tab.id);
     await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['src/area.js'] });
     return;
   }
-  const capture = { visible: captureVisible, full: captureFull, scroll: captureScroll }[mode];
-  if (!capture) throw new Error(`Unknown capture mode: ${mode}`);
   if (busy.has(tab.id)) throw new Error('A capture is already running on this tab.');
   busy.add(tab.id);
   try {
-    await capture(tab);
+    await { visible: captureVisible, full: captureFull, scroll: captureScroll }[mode](tab);
   } finally {
     busy.delete(tab.id);
   }
 }
 
-async function grabBlob(windowId) {
-  const url = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
-  return (await fetch(url)).blob();
+// captureVisibleTab grabs whatever tab is showing in the window, so every grab
+// is bracketed by a check that it is still the tab being captured.
+async function ensureShowing(tab) {
+  const now = await chrome.tabs.get(tab.id).catch(() => null);
+  if (!now || !now.active || now.windowId !== tab.windowId) {
+    throw new Error('Capture stopped: the tab was switched or closed.');
+  }
 }
 
-async function grab(windowId) {
-  return createImageBitmap(await grabBlob(windowId));
+// The quota is per extension, not per capture, so every grab shares one clock.
+let lastGrab = 0;
+
+async function grabBlob(tab) {
+  for (let attempt = 1; ; attempt++) {
+    await sleep(Math.max(0, lastGrab + CAPTURE_GAP_MS - Date.now()));
+    await ensureShowing(tab);
+    lastGrab = Date.now();
+    try {
+      const url = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+      await ensureShowing(tab);
+      return (await fetch(url)).blob();
+    } catch (e) {
+      // A restarted worker has lost the clock above; one wait covers that.
+      if (attempt > 1 || !/MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/.test(e.message)) throw e;
+      await sleep(1000);
+    }
+  }
+}
+
+async function grab(tab) {
+  return createImageBitmap(await grabBlob(tab));
 }
 
 // Reads the size from the PNG header instead of decoding the whole image.
@@ -83,8 +112,8 @@ async function pngSize(blob) {
   return [view.getUint32(0), view.getUint32(4)];
 }
 
-async function save(tab, mode, blob, width, height) {
-  const id = await putShot(blob, { mode, width, height, title: tab.title || '', url: tab.url || '' });
+async function save(tab, mode, blob, width, height, note = '') {
+  const id = await putShot(blob, { mode, width, height, note, title: tab.title || '', url: tab.url || '' });
   await chrome.tabs.create({ url: `src/viewer.html#${id}`, index: tab.index + 1, openerTabId: tab.id, windowId: tab.windowId });
 }
 
@@ -97,67 +126,74 @@ async function encode(canvas) {
 }
 
 async function captureVisible(tab) {
-  const blob = await grabBlob(tab.windowId);
+  const blob = await grabBlob(tab);
   await save(tab, 'visible', blob, ...(await pngSize(blob)));
 }
 
 async function captureArea(tab, rect, viewportWidth) {
+  // Only a selection the user armed from the popup or a shortcut counts.
+  if (!(await takeArea(tab.id))) return;
+  const numbers = [rect?.x, rect?.y, rect?.w, rect?.h, viewportWidth];
+  if (!numbers.every(Number.isFinite) || viewportWidth <= 0 || rect.w < 1 || rect.h < 1) return;
   clearError();
-  const bitmap = await grab(tab.windowId);
-  const ratio = bitmap.width / viewportWidth;
-  const sx = Math.round(rect.x * ratio);
-  const sy = Math.round(rect.y * ratio);
-  const w = Math.min(Math.round(rect.w * ratio), bitmap.width - sx);
-  const h = Math.min(Math.round(rect.h * ratio), bitmap.height - sy);
-  const canvas = new OffscreenCanvas(w, h);
-  canvas.getContext('2d').drawImage(bitmap, sx, sy, w, h, 0, 0, w, h);
-  bitmap.close();
-  await save(tab, 'area', await encode(canvas), w, h);
+  const bitmap = await grab(tab);
+  try {
+    const ratio = bitmap.width / viewportWidth;
+    const sx = Math.min(Math.max(0, Math.round(rect.x * ratio)), bitmap.width - 1);
+    const sy = Math.min(Math.max(0, Math.round(rect.y * ratio)), bitmap.height - 1);
+    const w = Math.max(1, Math.min(Math.round(rect.w * ratio), bitmap.width - sx));
+    const h = Math.max(1, Math.min(Math.round(rect.h * ratio), bitmap.height - sy));
+    const canvas = new OffscreenCanvas(w, h);
+    canvas.getContext('2d').drawImage(bitmap, sx, sy, w, h, 0, 0, w, h);
+    await save(tab, 'area', await encode(canvas), w, h);
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function inPage(tabId, func, args = []) {
+  const [result] = await chrome.scripting.executeScript({ target: { tabId }, func, args });
+  return result.result;
 }
 
 // Full page renders the whole document through the DevTools protocol, the
-// same path as DevTools' "Capture full size screenshot". It falls back to
-// scroll-and-stitch when another debugger holds the tab, and when the
-// document itself does not scroll (app layouts with an inner scroll pane).
+// same path as DevTools' "Capture full size screenshot". Page measurements
+// come from the extension's isolated world, never from page script. It falls
+// back to scroll-and-stitch when the real scroller is an inner pane, when
+// another debugger holds the tab, or when the render fails.
 async function captureFull(tab) {
-  const target = { tabId: tab.id };
+  await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['src/page.js'] });
+  const probe = await inPage(tab.id, () => globalThis.__pagesnap.probe());
+  if (probe.inner) return captureScroll(tab);
+  let shot = null;
   try {
-    await chrome.debugger.attach(target, '1.3');
-  } catch (e) {
-    if (/already attached|another debugger/i.test(e.message)) return captureScroll(tab);
-    throw e;
-  }
-  const send = (method, params) => chrome.debugger.sendCommand(target, method, params);
-  const evaluate = async (expression) =>
-    (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })).result.value;
-  let start;
-  let shot;
-  try {
-    // Fixed headers render where the viewport is, so the shot is taken from
-    // the top and the user's position is put back afterwards.
-    start = await evaluate(`(async () => {
-      const at = [scrollX, scrollY];
-      scrollTo({ left: 0, top: 0, behavior: 'instant' });
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      return { at, dpr: devicePixelRatio };
-    })()`);
-    shot = await renderFull(send, start.dpr);
+    const target = { tabId: tab.id };
+    let attached = false;
+    try {
+      await chrome.debugger.attach(target, '1.3');
+      attached = true;
+      shot = await renderFull((method, params) => chrome.debugger.sendCommand(target, method, params), probe.dpr);
+    } catch (e) {
+      // The scroll capture below still gets the page.
+      console.warn('PageSnap: full-page render failed, falling back to scrolling capture', e);
+    } finally {
+      if (attached) await chrome.debugger.detach(target).catch(() => {}); // best effort: the tab may have closed
+    }
   } finally {
-    if (start) await evaluate(`scrollTo({ left: ${start.at[0]}, top: ${start.at[1]}, behavior: 'instant' })`).catch(() => {}); // best effort: the tab may have navigated
-    await chrome.debugger.detach(target).catch(() => {}); // best effort: the tab may have closed
+    await inPage(tab.id, () => globalThis.__pagesnap.restore()).catch(() => {}); // best effort: page.js restores itself on a timer too
   }
   if (!shot) return captureScroll(tab);
   await save(tab, 'full', shot.blob, shot.width, shot.height);
 }
 
-// Returns null when the document does not scroll.
 async function renderFull(send, dpr) {
-  const { cssContentSize: css, cssLayoutViewport: viewport } = await send('Page.getLayoutMetrics');
-  if (css.height <= viewport.clientHeight + 1) return null;
+  if (!(dpr > 0 && dpr <= 16)) throw new Error(`Unexpected device pixel ratio ${dpr}`);
+  const { cssContentSize: css } = await send('Page.getLayoutMetrics');
   const width = Math.max(1, Math.ceil(css.width));
-  const height = Math.ceil(css.height);
+  const height = Math.max(1, Math.ceil(css.height));
   const scale = fit(width * dpr, height * dpr);
-  const tileHeight = Math.floor(MAX_TILE / (dpr * scale));
+  const ratio = dpr * scale;
+  const tileHeight = Math.max(1, Math.floor(MAX_TILE / ratio));
   const shoot = async (y, h) => {
     const { data } = await send('Page.captureScreenshot', {
       format: 'png',
@@ -172,20 +208,17 @@ async function renderFull(send, dpr) {
     const [w, h] = await pngSize(blob);
     return { blob, width: w, height: h };
   }
-  const ratio = dpr * scale;
   const canvas = new OffscreenCanvas(Math.round(width * ratio), Math.round(height * ratio));
   const ctx = canvas.getContext('2d');
   for (let y = 0; y < height; y += tileHeight) {
     const bitmap = await createImageBitmap(await shoot(y, Math.min(tileHeight, height - y)));
-    ctx.drawImage(bitmap, 0, Math.round(y * ratio));
-    bitmap.close();
+    try {
+      ctx.drawImage(bitmap, 0, Math.round(y * ratio));
+    } finally {
+      bitmap.close();
+    }
   }
   return { blob: await encode(canvas), width: canvas.width, height: canvas.height };
-}
-
-async function inPage(tabId, func, args = []) {
-  const [result] = await chrome.scripting.executeScript({ target: { tabId }, func, args });
-  return result.result;
 }
 
 // Frames are drawn as they arrive so only one full-size bitmap is alive at a
@@ -196,46 +229,67 @@ async function captureScroll(tab) {
   let canvas;
   let ctx;
   let ratio;
+  let k;
   let scale;
+  let cap;
   let bottom = 0;
+  let cut = false;
   try {
     let y = 0;
     let lastTop = -1;
-    let lastShot = 0;
-    for (let frames = 0; frames < MAX_FRAMES; frames++) {
+    for (let frames = 0; ; frames++) {
+      if (frames === MAX_FRAMES) {
+        cut = true;
+        break;
+      }
       const pos = await inPage(tab.id, (to) => globalThis.__pagesnap.scrollTo(to), [y]);
+      if (!pos.visible) throw new Error('Capture stopped: the tab was hidden.');
       if (pos.top <= lastTop) break;
       lastTop = pos.top;
-      await sleep(Math.max(0, lastShot + CAPTURE_GAP_MS - Date.now()));
-      lastShot = Date.now();
-      const bitmap = await grab(tab.windowId);
-      const { region } = pos;
-      if (!canvas) {
-        ratio = bitmap.width / info.viewportWidth;
-        scale = fit(info.region.w * ratio, info.scrollHeight * ratio);
-        canvas = new OffscreenCanvas(Math.round(info.region.w * ratio * scale), Math.round(info.scrollHeight * ratio * scale));
-        ctx = canvas.getContext('2d');
+      const bitmap = await grab(tab);
+      try {
+        const { region } = pos;
+        if (!canvas) {
+          ratio = bitmap.width / info.viewportWidth;
+          scale = fit(info.region.w * ratio, info.scrollHeight * ratio);
+          k = ratio * scale;
+          const width = Math.max(1, Math.round(info.region.w * k));
+          cap = Math.min(MAX_SIDE, Math.floor(MAX_AREA / width));
+          canvas = new OffscreenCanvas(width, Math.max(1, Math.min(cap, Math.round(info.scrollHeight * k))));
+          ctx = canvas.getContext('2d');
+        }
+        const atEnd = pos.top + pos.clientHeight >= pos.scrollHeight - 1;
+        // Stitching works in device pixels: scroll offsets snap to them, so a
+        // frame copies 1:1 into place, with no resampling that would blur the
+        // rows where frames meet. Only a page past the canvas limit is scaled.
+        const sx = Math.round(region.x * ratio);
+        const sy = Math.round(region.y * ratio);
+        const sw = Math.round((region.x + region.w) * ratio) - sx;
+        const sh = Math.round((region.y + region.h) * ratio) - sy;
+        // The last frame is pinned to the true bottom, because the final
+        // offset is clamped and snapped rather than where it was asked to be.
+        const top = atEnd ? Math.round(pos.scrollHeight * ratio) - sh : Math.round(pos.top * ratio);
+        const y0 = Math.round(top * scale);
+        const y1 = Math.round((top + sh) * scale);
+        if (y1 > cap) cut = true;
+        if (y1 > canvas.height) {
+          const grown = new OffscreenCanvas(canvas.width, Math.min(cap, Math.max(y1, Math.round(pos.scrollHeight * k))));
+          grown.getContext('2d').drawImage(canvas, 0, 0);
+          canvas = grown;
+          ctx = canvas.getContext('2d');
+        }
+        ctx.drawImage(bitmap, sx, sy, sw, sh, 0, y0, canvas.width, y1 - y0);
+        bottom = Math.min(y1, cap);
+        if (cut || atEnd) break;
+        // One CSS pixel of overlap: at fractional ratios the next offset can
+        // snap just past this frame's bottom and leave a gap row.
+        y = pos.top + region.h - 1;
+      } finally {
+        bitmap.close();
       }
-      const k = ratio * scale;
-      const end = Math.min(Math.round((pos.top + region.h) * k), MAX_SIDE);
-      if (end > canvas.height) {
-        const grown = new OffscreenCanvas(canvas.width, Math.min(MAX_SIDE, Math.max(end, Math.round(pos.scrollHeight * k))));
-        grown.getContext('2d').drawImage(canvas, 0, 0);
-        canvas = grown;
-        ctx = canvas.getContext('2d');
-      }
-      ctx.drawImage(
-        bitmap,
-        Math.round(region.x * ratio), Math.round(region.y * ratio), Math.round(region.w * ratio), Math.round(region.h * ratio),
-        0, Math.round(pos.top * k), Math.round(region.w * k), Math.round(region.h * k),
-      );
-      bitmap.close();
-      bottom = end;
-      if (bottom >= MAX_SIDE || pos.top + info.clientHeight >= pos.scrollHeight - 1) break;
-      y = pos.top + region.h;
     }
   } finally {
-    await inPage(tab.id, () => globalThis.__pagesnap.restore()).catch(() => {}); // best effort: the tab may have navigated
+    await inPage(tab.id, () => globalThis.__pagesnap.restore()).catch(() => {}); // best effort: page.js restores itself on a timer too
   }
   if (!canvas) throw new Error('Nothing was captured.');
   if (bottom < canvas.height) {
@@ -244,5 +298,5 @@ async function captureScroll(tab) {
     trimmed.getContext('2d').drawImage(canvas, 0, 0);
     canvas = trimmed;
   }
-  await save(tab, 'scroll', await encode(canvas), canvas.width, canvas.height);
+  await save(tab, 'scroll', await encode(canvas), canvas.width, canvas.height, cut ? 'Cut off: the page is longer than the largest image the browser can make.' : '');
 }

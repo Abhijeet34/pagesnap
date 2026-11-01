@@ -35,14 +35,16 @@
   }
 
   function onKey(e) {
-    if (e.key !== 'Escape') return;
+    if (!e.isTrusted || e.key !== 'Escape') return;
     e.preventDefault();
     e.stopPropagation();
     cleanup();
   }
 
+  // Page script can dispatch synthetic pointer events at the overlay; only
+  // real input from the user may make a selection.
   host.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0) return;
+    if (!e.isTrusted || e.button !== 0) return;
     e.preventDefault();
     host.setPointerCapture(e.pointerId);
     start = { x: e.clientX, y: e.clientY };
@@ -51,7 +53,7 @@
   });
 
   host.addEventListener('pointermove', (e) => {
-    if (!start) return;
+    if (!e.isTrusted || !start) return;
     const x = Math.max(0, Math.min(start.x, e.clientX));
     const y = Math.max(0, Math.min(start.y, e.clientY));
     const w = Math.min(innerWidth, Math.max(start.x, e.clientX)) - x;
@@ -62,8 +64,8 @@
     Object.assign(size.style, { display: 'block', left: `${x}px`, top: `${Math.max(0, y - 24)}px` });
   });
 
-  host.addEventListener('pointerup', async () => {
-    if (!start) return;
+  host.addEventListener('pointerup', async (e) => {
+    if (!e.isTrusted || !start) return;
     start = null;
     cleanup();
     if (!rect || rect.w < 4 || rect.h < 4) return;
