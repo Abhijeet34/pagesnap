@@ -22,8 +22,12 @@ function showError(message) {
   busy(false);
 }
 
+// A worker that died mid-capture never clears its entry; updates arrive
+// several times a second, so one this old is left over, not live.
+const STALE_MS = 60_000;
+
 function render(state) {
-  if (!state) return;
+  if (!state || !(Date.now() - state.at < STALE_MS)) return;
   busy(true);
   status.textContent = '';
   status.classList.remove('error');
@@ -39,8 +43,16 @@ function render(state) {
 
 // A capture started earlier (or by a shortcut) shows its progress here too.
 render((await chrome.storage.session.get(key))[key]);
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'session' && changes[key]?.newValue) render(changes[key].newValue);
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== 'session' || !changes[key]) return;
+  if (changes[key].newValue) return render(changes[key].newValue);
+  // The capture ended. A failure leaves its message on the toolbar title.
+  const title = await chrome.action.getTitle({});
+  if (title.startsWith('PageSnap: ')) showError(title.slice('PageSnap: '.length));
+  else {
+    panel.hidden = true;
+    busy(false);
+  }
 });
 
 for (const button of buttons) {

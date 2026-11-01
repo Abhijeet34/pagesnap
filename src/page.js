@@ -128,7 +128,7 @@ globalThis.__pagesnap = (() => {
     // instead of animating.
     saved.el.scrollTop = saved.top;
     saved.el.scrollLeft = saved.left;
-    if (saved.behavior) saved.el.style.setProperty('scroll-behavior', saved.behavior);
+    if (saved.behavior) saved.el.style.setProperty('scroll-behavior', saved.behavior, saved.priority);
     else saved.el.style.removeProperty('scroll-behavior');
     saved = null;
   }
@@ -139,6 +139,7 @@ globalThis.__pagesnap = (() => {
       top: el.scrollTop,
       left: el.scrollLeft,
       behavior: el.style.getPropertyValue('scroll-behavior'),
+      priority: el.style.getPropertyPriority('scroll-behavior'),
     };
     el.style.setProperty('scroll-behavior', 'auto', 'important');
     arm();
@@ -187,7 +188,7 @@ globalThis.__pagesnap = (() => {
       // shift every one of them.
       scroller.scrollLeft = 0;
       addSheet(document);
-      return { region: region(), viewportWidth: innerWidth, clientHeight: scroller.clientHeight, scrollHeight: scroller.scrollHeight };
+      return { region: region(), viewportWidth: innerWidth, scrollHeight: scroller.scrollHeight };
     },
 
     async scrollTo(y) {

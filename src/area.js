@@ -1,8 +1,11 @@
 // Injected for area capture: the user drags a rectangle, the overlay removes
 // itself, and the service worker captures the viewport and crops it.
 (() => {
-  if (globalThis.__pagesnapArea) return;
-  globalThis.__pagesnapArea = true;
+  // A page script can remove the overlay without Esc or a drag ever ending
+  // it; a stale one is cleared so area capture keeps working.
+  const previous = globalThis.__pagesnapArea;
+  if (previous?.host.isConnected) return;
+  previous?.cleanup();
 
   const host = document.createElement('div');
   // Has to sit above any page content, so it takes the top of the int32 range.
@@ -24,6 +27,7 @@
   const size = root.querySelector('.size');
   const hint = root.querySelector('.hint');
   document.documentElement.append(host);
+  globalThis.__pagesnapArea = { host, cleanup };
 
   let start = null;
   let rect = null;

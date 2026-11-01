@@ -67,6 +67,10 @@ PAGES['/shadow'] = `<body style="margin:0"><x-app>${bands(8, 500)}</x-app><scrip
     }
   });</script></body>`;
 // Wider than the viewport, with a marker column at the left edge.
+// Snaps back from anything below 1500 px, as scroll-jacking pages do.
+PAGES['/stuck'] = `<body style="margin:0">${bands(10, 500)}<script>addEventListener('scroll', () => { if (scrollY > 1500) scrollTo(0, 1500); });</script></body>`;
+// Wider than one 16384-pixel render at 2x: the right edge must be real content.
+PAGES['/verywide'] = `<body style="margin:0;width:9000px;height:600px;background:${BANDS[0]}"><div style="position:absolute;left:8800px;top:0;width:200px;height:600px;background:#ff00ff"></div></body>`;
 PAGES['/wide'] = `<body style="margin:0;width:3000px"><div style="position:absolute;left:0;top:0;width:200px;height:3000px;background:#ff00ff"></div>${bands(6, 500)}</body>`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -441,6 +445,20 @@ try {
     const natural = 20000 * DPR;
     check(`${mode} tall: fits the canvas limit`, natural <= 32767 ? h === natural : h <= 32767 && h > 32000, `${w}x${h}`);
     check(`${mode} tall: every band at its scaled offset`, BANDS.slice(0, 10).every((c, i) => bandColors[2][i] === c), bandColors[2].join(' '));
+    // Unscaled, every row is exactly one band colour; a gap between render
+    // tiles or stitched frames shows up as a stray row.
+    if (natural <= 32767) {
+      const bad = await strays(viewer, 5, BANDS.slice(0, 10));
+      check(`${mode} tall: no seams`, bad.length === 0, bad.slice(0, 3).join(', ') || 'none');
+    }
+  }
+
+  // Full page wider than one render: the far right is the page's own content.
+  {
+    const { viewer } = await capture('/verywide', 'full');
+    const [w, h, colors] = await sample(viewer, [[5, 5], [Math.round(8900 * DPR), 5], [Math.round(8900 * DPR), Math.round(590 * DPR)]]);
+    check('full very wide: whole width', w === 9000 * DPR, `${w}x${h}`);
+    check('full very wide: right edge is real content', colors[1] === '#ff00ff' && colors[2] === '#ff00ff', colors.join(' '));
   }
 
   // Scrolling capture follows an inner scroll pane.
@@ -601,6 +619,12 @@ try {
     const link = await openShare();
     await sleep(300);
     await shoot(sender, 'share-waiting');
+    const fieldKeepsCopy = await evaluate(sender, `(() => {
+      const e = new KeyboardEvent('keydown', { key: 'c', metaKey: true, bubbles: true, cancelable: true });
+      document.querySelector('.sheet .link').dispatchEvent(e);
+      return !e.defaultPrevented;
+    })()`);
+    check('share: Cmd+C in the link field copies the link, not the image', fieldKeepsCopy);
     check('share: link carries only a 22-character key in the fragment', /#[A-Za-z0-9_-]{22}$/.test(link), link.replace(/#.*/, '#…'));
     const receiver = await openReceiver(link);
     const cleared = await waitFor(() => evaluate(receiver, 'location.hash === "" && location.href.startsWith("http")'), 'key cleared', 5000).catch(() => false);
@@ -662,23 +686,58 @@ try {
   }
 
   // Area: drag a rectangle; the overlay must be gone from the crop.
+  const drag = async (page) => {
+    // The overlay's shadow root is closed, so its arrival shows as a new last child of <html>.
+    await waitFor(() => evaluate(page, 'document.documentElement.lastElementChild.tagName === "DIV"'), 'area overlay').catch(async (e) => {
+      console.error('page children:', await evaluate(page, '[...document.documentElement.children].map((e) => e.tagName)'), 'badge:', await extensionError());
+      throw e;
+    });
+    const mouse = (type, x, y, buttons) => cdp.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons, clickCount: 1 }, page);
+    await mouse('mousePressed', 100, 100, 1);
+    await mouse('mouseMoved', 200, 180, 1);
+    await mouse('mouseMoved', 300, 250, 1);
+    await mouse('mouseReleased', 300, 250, 0);
+  };
   {
-    const drag = async (page) => {
-      // The overlay's shadow root is closed, so its arrival shows as a new last child of <html>.
-      await waitFor(() => evaluate(page, 'document.documentElement.lastElementChild.tagName === "DIV"'), 'area overlay').catch(async (e) => {
-        console.error('page children:', await evaluate(page, '[...document.documentElement.children].map((e) => e.tagName)'), 'badge:', await extensionError());
-        throw e;
-      });
-      const mouse = (type, x, y, buttons) => cdp.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons, clickCount: 1 }, page);
-      await mouse('mousePressed', 100, 100, 1);
-      await mouse('mouseMoved', 200, 180, 1);
-      await mouse('mouseMoved', 300, 250, 1);
-      await mouse('mouseReleased', 300, 250, 0);
-    };
     const { viewer } = await capture('/long', 'area', drag);
     const [w, h, colors] = await sample(viewer, [[10, 10], [100 * DPR, 75 * DPR], [195 * DPR, 145 * DPR]]);
-    check('area: crop size', w === 200 * DPR && h === 150 * DPR, `${w}x${h}`);
+    check('area: crop size', w === Math.round(200 * DPR) && h === Math.round(150 * DPR), `${w}x${h}`);
     check('area: no overlay tint in the crop', colors.every((c) => c === BANDS[0]), colors.join(' '));
+  }
+
+  // A page that deletes the overlay must not lock area capture until reload.
+  {
+    const overlay = (page) => waitFor(() => evaluate(page, 'document.documentElement.lastElementChild.tagName === "DIV"'), 'area overlay');
+    const { viewer } = await capture('/long', 'area', async (page) => {
+      await overlay(page);
+      await evaluate(page, 'document.documentElement.lastElementChild.remove()');
+      const url = await evaluate(page, 'location.href');
+      const tab = (await cdp.send('Target.getTargets', { filter: [{ type: 'tab' }] })).targetInfos.find((t) => t.url === url);
+      const before = new Set((await targets()).map((t) => t.targetId));
+      await cdp.send('Extensions.triggerAction', { id: extId, targetId: tab.targetId });
+      const popup = await waitFor(async () => (await targets()).find((t) => !before.has(t.targetId) && t.url.endsWith('/src/popup.html')), 'second popup');
+      const session = await attach(popup.targetId);
+      await waitFor(() => evaluate(session, 'document.readyState === "complete"'), 'second popup ready');
+      await evaluate(session, 'document.querySelector("[data-mode=area]").click()');
+      await drag(page);
+    });
+    const [w, h] = await sample(viewer, []);
+    check('area: works again after the page removed the overlay', w === Math.round(200 * DPR) && h === Math.round(150 * DPR), `${w}x${h}`);
+  }
+
+  // A page that will not scroll further says so instead of looking complete.
+  {
+    const { viewer } = await capture('/stuck', 'scroll');
+    const detail = await evaluate(viewer, 'document.querySelector(".meta p").textContent');
+    check('scroll: a stalled page is marked as stopped early', detail.includes('Stopped early'), detail);
+  }
+
+  // Every capture above has ended, so none may leave the popup locked.
+  {
+    const { popupSession } = await openPopup('/long');
+    const left = await evaluate(popupSession, 'chrome.storage.session.get().then((all) => Object.keys(all).filter((k) => k.startsWith("progress:")))');
+    const disabled = await evaluate(popupSession, 'document.querySelector("button[data-mode]").disabled');
+    check('popup: no capture leaves progress behind', left.length === 0 && !disabled, left.join(' ') || 'none');
   }
 } catch (e) {
   console.error(e);

@@ -113,10 +113,12 @@ if (!shot) {
     }
   };
   copy.addEventListener('click', copyImage);
-  await setupShare(shot);
 
   addEventListener('keydown', (e) => {
     if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+    // Inside the share dialog the keys keep their usual meaning, so the link
+    // field copies its text.
+    if (e.target.closest?.('dialog, input')) return;
     const key = e.key.toLowerCase();
     if (key === 's') {
       e.preventDefault();
@@ -126,4 +128,5 @@ if (!shot) {
       copyImage();
     }
   });
+  await setupShare(shot);
 }

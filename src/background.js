@@ -5,8 +5,8 @@ const CAPTURE_GAP_MS = 550;
 // Chromium refuses canvases past 32767 px on a side or 268M px in area.
 const MAX_SIDE = 32767;
 const MAX_AREA = 16384 * 16384;
-// Page.captureScreenshot repeats content past this many output pixels, so
-// taller full-page shots are taken in tiles.
+// Page.captureScreenshot repeats content past this many output pixels on
+// either side, so larger full-page shots are taken in tiles.
 const MAX_TILE = 16384;
 const MAX_FRAMES = 200;
 // Bounds on the lazy-load pass before a full-page render.
@@ -88,7 +88,7 @@ async function progress(tab, label, value = null) {
   // Badge and storage writes are cheap but not free; a few per second is plenty.
   if (value !== null && value < 1 && now - (lastProgress.get(tab.id) ?? 0) < PROGRESS_STEP_MS) return;
   lastProgress.set(tab.id, now);
-  await chrome.storage.session.set({ [`progress:${tab.id}`]: { label, value } });
+  await chrome.storage.session.set({ [`progress:${tab.id}`]: { label, value, at: now } });
   await chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: '#3a5cf5' });
   await chrome.action.setBadgeText({ tabId: tab.id, text: value === null ? '…' : `${Math.round(value * 100)}%` });
 }
@@ -176,6 +176,7 @@ async function captureArea(tab, rect, viewportWidth) {
     await save(tab, 'area', await encode(canvas), w, h);
   } finally {
     bitmap.close();
+    await endProgress(tab);
   }
 }
 
@@ -217,6 +218,10 @@ async function captureFull(tab) {
     await inPage(tab.id, () => globalThis.__pagesnap.restore()).catch(() => {}); // best effort: page.js restores itself on a timer too
   }
   if (!shot) return captureScroll(tab);
+  // The debugger renders whatever the tab shows now; a page that navigated
+  // elsewhere mid-capture is not the one the user chose.
+  const origin = (url) => { try { return new URL(url).origin; } catch { return null; } };
+  if (origin((await chrome.tabs.get(tab.id)).url) !== origin(tab.url)) throw new Error('Capture stopped: the page navigated away.');
   await save(tab, 'full', shot.blob, shot.width, shot.height);
 }
 
@@ -243,30 +248,34 @@ async function renderFull(send, dpr, onProgress) {
   const height = Math.max(1, Math.ceil(css.height));
   const scale = fit(width * dpr, height * dpr);
   const ratio = dpr * scale;
-  const tileHeight = Math.max(1, Math.floor(MAX_TILE / ratio));
-  const shoot = async (y, h) => {
+  const tile = Math.max(1, Math.floor(MAX_TILE / ratio));
+  const shoot = async (x, y, w, h) => {
     const { data } = await send('Page.captureScreenshot', {
       format: 'png',
       captureBeyondViewport: true,
-      clip: { x: 0, y, width, height: h, scale },
+      clip: { x, y, width: w, height: h, scale },
     });
     return (await fetch(`data:image/png;base64,${data}`)).blob();
   };
 
-  if (height <= tileHeight) {
-    const blob = await shoot(0, height);
+  if (width <= tile && height <= tile) {
+    const blob = await shoot(0, 0, width, height);
     const [w, h] = await pngSize(blob);
     return { blob, width: w, height: h };
   }
   const canvas = new OffscreenCanvas(Math.round(width * ratio), Math.round(height * ratio));
   const ctx = canvas.getContext('2d');
-  for (let y = 0; y < height; y += tileHeight) {
-    await onProgress(y / height);
-    const bitmap = await createImageBitmap(await shoot(y, Math.min(tileHeight, height - y)));
-    try {
-      ctx.drawImage(bitmap, 0, Math.round(y * ratio));
-    } finally {
-      bitmap.close();
+  const total = Math.ceil(width / tile) * Math.ceil(height / tile);
+  let done = 0;
+  for (let y = 0; y < height; y += tile) {
+    for (let x = 0; x < width; x += tile) {
+      await onProgress(done++ / total);
+      const bitmap = await createImageBitmap(await shoot(x, y, Math.min(tile, width - x), Math.min(tile, height - y)));
+      try {
+        ctx.drawImage(bitmap, Math.round(x * ratio), Math.round(y * ratio));
+      } finally {
+        bitmap.close();
+      }
     }
   }
   return { blob: await encode(canvas), width: canvas.width, height: canvas.height };
@@ -285,6 +294,7 @@ async function captureScroll(tab) {
   let cap;
   let bottom = 0;
   let cut = false;
+  let stalled = false;
   try {
     let y = 0;
     let lastTop = -1;
@@ -295,7 +305,10 @@ async function captureScroll(tab) {
       }
       const pos = await inPage(tab.id, (to) => globalThis.__pagesnap.scrollTo(to), [y]);
       if (!pos.visible) throw new Error('Capture stopped: the tab was hidden.');
-      if (pos.top <= lastTop) break;
+      if (pos.top <= lastTop) {
+        stalled = true;
+        break;
+      }
       lastTop = pos.top;
       const bitmap = await grab(tab);
       try {
@@ -324,7 +337,9 @@ async function captureScroll(tab) {
         const y1 = Math.round((top + sh) * scale);
         if (y1 > cap) cut = true;
         if (y1 > canvas.height) {
-          const grown = new OffscreenCanvas(canvas.width, Math.min(cap, Math.max(y1, Math.round(pos.scrollHeight * k))));
+          // Pages that keep loading more grow on every frame; growing by half
+          // again bounds the number of full-canvas copies.
+          const grown = new OffscreenCanvas(canvas.width, Math.min(cap, Math.max(y1, Math.round(pos.scrollHeight * k), Math.round(canvas.height * 1.5))));
           grown.getContext('2d').drawImage(canvas, 0, 0);
           canvas = grown;
           ctx = canvas.getContext('2d');
@@ -345,10 +360,12 @@ async function captureScroll(tab) {
   }
   if (!canvas) throw new Error('Nothing was captured.');
   if (bottom < canvas.height) {
-    // The page got shorter while scrolling; trim the unused space.
+    // The page got shorter while scrolling, or the canvas grew ahead of it.
     const trimmed = new OffscreenCanvas(canvas.width, bottom);
     trimmed.getContext('2d').drawImage(canvas, 0, 0);
     canvas = trimmed;
   }
-  await save(tab, 'scroll', await encode(canvas), canvas.width, canvas.height, cut ? 'Cut off: the page is longer than the largest image the browser can make.' : '');
+  const note = cut ? 'Cut off: the page is longer than the largest image the browser can make.'
+    : stalled ? 'Stopped early: the page would not scroll any further.' : '';
+  await save(tab, 'scroll', await encode(canvas), canvas.width, canvas.height, note);
 }
