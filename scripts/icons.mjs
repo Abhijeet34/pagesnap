@@ -2,6 +2,7 @@
 // Brave/Chrome, so no image tooling is needed.
 //   node scripts/icons.mjs [path-to-browser-binary]
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -38,6 +39,11 @@ try {
   }
   ws.close();
 } finally {
+  // The profile can only be deleted once the browser has let go of it;
+  // deleting straight after kill() left a profile behind on every run.
+  const exited = browser.exitCode !== null || once(browser, 'exit');
   browser.kill();
-  await rm(profile, { recursive: true, force: true }).catch(() => {}); // best effort: the browser may still hold files
+  await Promise.race([exited, new Promise((r) => setTimeout(r, 5000))]);
+  if (browser.exitCode === null && browser.signalCode === null) browser.kill('SIGKILL');
+  await rm(profile, { recursive: true, force: true, maxRetries: 5 }).catch((e) => console.error(`Could not delete the test profile ${profile}: ${e.message}`));
 }

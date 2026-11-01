@@ -7,6 +7,7 @@
 //
 // Window capture is not covered: it needs the system picker and a human.
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtemp, readdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -753,10 +754,15 @@ try {
   console.error(e);
   failures++;
 } finally {
+  // The profile can only be deleted once the browser has let go of it;
+  // deleting straight after kill() left a profile behind on every run.
+  const exited = browser.exitCode !== null || once(browser, 'exit');
   browser.kill();
+  await Promise.race([exited, new Promise((r) => setTimeout(r, 5000))]);
+  if (browser.exitCode === null && browser.signalCode === null) browser.kill('SIGKILL');
   server.close();
   tracker.close();
-  await rm(profile, { recursive: true, force: true }).catch(() => {}); // best effort: the browser may still hold files
+  await rm(profile, { recursive: true, force: true, maxRetries: 5 }).catch((e) => console.error(`Could not delete the test profile ${profile}: ${e.message}`));
 }
 
 console.log(failures ? `\n${failures} failed` : '\nall passed');
