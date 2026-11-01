@@ -25,7 +25,15 @@ function fail(heading, text) {
   bar.hidden = true;
 }
 
-if (!isSecret(secret)) {
+// The key is gone from the address bar by now, so a reload or a trip back
+// through history lands here keyless; say so instead of blaming the link.
+const revisited = ['reload', 'back_forward'].includes(performance.getEntriesByType('navigation')[0]?.type);
+
+if (revisited && !secret) {
+  fail('This page was reloaded', 'The key leaves the address bar as soon as the page opens, so it can\'t reconnect. Open the original link again.');
+} else if (!secret) {
+  fail('This link has no key', 'The part after # is missing. Ask the sender to copy the whole link again.');
+} else if (!isSecret(secret)) {
   fail('This link is incomplete', 'Ask the sender to copy the whole link again.');
 } else {
   receive({

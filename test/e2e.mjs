@@ -635,6 +635,18 @@ try {
     await evaluate(sender, 'document.querySelector(".sheet .decline").click()');
     const declined = await waitFor(() => evaluate(second, 'document.querySelector("h1").textContent.includes("declined") && document.querySelector("h1").textContent'), 'declined', 10_000);
     check('share: declined recipient receives nothing', declined && (await evaluate(second, 'document.querySelector(".result").hidden')), declined);
+
+    // Keyless arrivals name their real cause rather than one generic error.
+    await evaluate(second, 'location.reload()');
+    await sleep(300);
+    const reloaded = await waitFor(() => evaluate(second, 'document.readyState === "complete" && document.querySelector("h1").textContent'), 'reloaded page');
+    check('share: reloading the receiver explains the key is gone', reloaded === 'This page was reloaded', reloaded);
+    const bare = await openReceiver(link.replace(/#.*/, ''));
+    // The new tab reports complete for its initial blank document, so wait
+    // for the receiver's own verdict instead.
+    const keyless = await waitFor(() => evaluate(bare, '(h => h && h !== "Receiving a screenshot" && h)(document.querySelector("h1")?.textContent)'), 'keyless page')
+      .catch(() => evaluate(bare, 'document.querySelector("h1")?.textContent'));
+    check('share: a link without its key says so', keyless === 'This link has no key', keyless);
     await evaluate(sender, 'document.querySelector(".sheet .stop").click()');
   }
 
