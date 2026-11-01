@@ -29,6 +29,22 @@ const PAGES = {
     <div id="pane" style="position:absolute;top:50px;bottom:0;left:0;right:0;overflow:auto">${bands(8, 400)}</div></body>`,
 };
 
+PAGES['/sticky'] = `<body style="margin:0">
+  <div id="nav" style="height:40px;background:#ff00ff"></div>
+  <div style="height:1000px;background:${BANDS[0]}"></div>
+  <div style="position:sticky;top:0;height:80px;background:#00ff00"></div>
+  ${bands(6, 500)}
+  <script>
+    // A header that a scroll handler pins, as many sites do.
+    addEventListener('scroll', () => {
+      const pin = scrollY > 100;
+      nav.style.cssText = 'height:40px;background:#ff00ff;' + (pin ? 'position:fixed;top:0;left:0;right:0' : '');
+      document.body.style.paddingTop = pin ? '40px' : '';
+    });
+  </script></body>`;
+// Taller than Chromium's canvas side limit at DPR 2, so the result must be scaled.
+PAGES['/tall'] = `<body style="margin:0">${bands(10, 2000)}</body>`;
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 class CDP {
@@ -112,10 +128,11 @@ try {
 
   const tabsUsed = new Set();
   // Clicks a mode in the real popup and returns the session of the viewer tab it opens.
-  async function capture(path, mode, beforeViewer) {
+  async function capture(path, mode, beforeViewer, setup) {
     const { targetId } = await cdp.send('Target.createTarget', { url: origin + path });
     const page = await attach(targetId);
     await evaluate(page, 'new Promise((r) => document.readyState === "complete" ? r() : addEventListener("load", r))');
+    if (setup) await setup(page);
     const seen = new Set((await targets()).map((t) => t.targetId));
     const { targetInfos } = await cdp.send('Target.getTargets', { filter: [{ type: 'tab' }] });
     const tab = targetInfos.find((t) => t.url === origin + path && !tabsUsed.has(t.targetId));
@@ -156,6 +173,42 @@ try {
     check(`${mode}: every band at its offset`, BANDS.every((c, i) => colors[i + 1] === c), colors.slice(1, 13).join(' '));
     check(`${mode}: fixed header not repeated`, colors[13] !== HEADER && colors[14] !== HEADER, `${colors[13]} ${colors[14]}`);
     check(`${mode}: page scroll restored`, page.y === 0, `scrollY=${page.y}`);
+  }
+
+  // Full page from a scrolled position still starts at the top of the document.
+  {
+    const { viewer, page } = await capture('/long', 'full', null, (p) => evaluate(p, 'scrollTo(0, 2000)'));
+    const [w, h, colors] = await sample(viewer, [[20, 30 * DPR], ...BANDS.map((_, i) => [20, (i * 500 + 250) * DPR])]);
+    check('full from scrolled page: whole page', h === 6000 * DPR && colors[0] === HEADER && BANDS.every((c, i) => colors[i + 1] === c), `${w}x${h} ${colors.join(' ')}`);
+    check('full from scrolled page: scroll position kept', page.y === 2000, `scrollY=${page.y}`);
+  }
+
+  // Full page on an app-style page falls back to the inner pane.
+  {
+    const { viewer } = await capture('/inner', 'full');
+    const [w, h, colors] = await sample(viewer, BANDS.slice(0, 8).map((_, i) => [20, (i * 400 + 200) * DPR]));
+    check('full inner pane: falls back to the pane content', h === 3200 * DPR && BANDS.slice(0, 8).every((c, i) => colors[i] === c), `${w}x${h}`);
+  }
+
+  // Sticky bars stay in place, and a header pinned on scroll appears once.
+  {
+    const { viewer } = await capture('/sticky', 'scroll');
+    const stickyAt = 1040;
+    const [w, h, colors] = await sample(viewer, [[20, 20 * DPR], [20, (stickyAt + 40) * DPR], ...[1, 2, 3, 4].map((k) => [20, (stickyAt + 80 + k * 600 + 20) * DPR])]);
+    check('sticky: page height', h === (40 + 1000 + 80 + 3000) * DPR, `${w}x${h}`);
+    check('sticky: pinned header at the top', colors[0] === '#ff00ff', colors[0]);
+    check('sticky: sticky bar at its place', colors[1] === '#00ff00', colors[1]);
+    check('sticky: neither repeats further down', colors.slice(2).every((c) => c !== '#ff00ff' && c !== '#00ff00'), colors.slice(2).join(' '));
+  }
+
+  // Pages past the canvas limit come out scaled to fit, not cut off or failed.
+  for (const mode of ['full', 'scroll']) {
+    const { viewer } = await capture('/tall', mode);
+    const [w, h, colors] = await sample(viewer, [[5, 5], [5, 0]]);
+    const scale = h / (20000 * DPR);
+    const bandColors = await sample(viewer, BANDS.slice(0, 10).map((_, i) => [5, Math.round((i * 2000 + 1000) * DPR * scale)]));
+    check(`${mode} tall: scaled to the canvas limit`, h <= 32767 && h > 32000, `${w}x${h}`);
+    check(`${mode} tall: every band at its scaled offset`, BANDS.slice(0, 10).every((c, i) => bandColors[2][i] === c), bandColors[2].join(' '));
   }
 
   // Scrolling capture follows an inner scroll pane.

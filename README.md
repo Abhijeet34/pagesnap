@@ -23,7 +23,8 @@ Shots are kept locally for 24 hours, then pruned.
 ## Limits
 
 - Full page shows the browser's "started debugging this browser" bar for a moment, because it uses the DevTools protocol. If DevTools is already attached to the tab, it falls back to scrolling capture.
-- Pages that size everything to `100vh` with an inner scroller come out viewport-sized in Full page; use Scrolling capture for those.
+- Pages that size everything to `100vh` with an inner scroller make Full page fall back to Scrolling capture of that inner pane.
+- Scrolling capture hides fixed elements after the first frame and returns sticky ones to their place in the page, so headers appear once.
 - Images taller or wider than 32767 px, or above 268M pixels, are scaled down to fit Chromium's canvas limit.
 - Browser pages (`brave://`, `chrome://`, the extension store) cannot be captured.
 - Window or screen on macOS needs the browser allowed under System Settings > Privacy & Security > Screen Recording.

@@ -1,13 +1,19 @@
 // Injected into the isolated world before a scrolling capture. State lives on
 // globalThis so later executeScript calls in the same world can reach it.
 globalThis.__pagesnap = (() => {
+  // Overrides go through attributes and one stylesheet rather than inline
+  // styles, because scroll handlers often rewrite an element's style attribute
+  // mid-capture and would wipe an inline override.
+  const HIDE = 'data-pagesnap-hide';
+  const UNSTICK = 'data-pagesnap-unstick';
   let scroller;
   let isDocument;
   let saved;
-  const hidden = [];
+  let sheet;
 
   const nextFrame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const rootScroller = () => document.scrollingElement || document.documentElement;
 
   function scrollsY(el) {
     if (el.scrollHeight <= el.clientHeight + 1) return false;
@@ -18,7 +24,7 @@ globalThis.__pagesnap = (() => {
   // Apps that pin the body to 100vh scroll an inner element instead; pick the
   // largest visible one so the stitch follows what the user actually scrolls.
   function findScroller() {
-    const root = document.scrollingElement || document.documentElement;
+    const root = rootScroller();
     if (root.scrollHeight > root.clientHeight + 1) return root;
     let best = null;
     let bestArea = 0;
@@ -43,51 +49,62 @@ globalThis.__pagesnap = (() => {
     return { x, y, w: Math.min(scroller.clientWidth, innerWidth - x), h: Math.min(scroller.clientHeight, innerHeight - y) };
   }
 
-  // Fixed headers and sticky bars would repeat in every frame, so they are
-  // hidden once the first frame has them. Anything containing the scroller
-  // (a fixed modal, say) stays, or the content itself would vanish.
-  function hideFloating() {
+  // After the first frame, fixed elements would repeat in every frame, so they
+  // are hidden; sticky ones are returned to the flow so they still appear once,
+  // where they belong. Re-run after every scroll because sites pin headers from
+  // scroll handlers. Anything containing the scroller (a fixed modal, say)
+  // stays, or the content itself would vanish.
+  function neutralizeFloating() {
     for (const el of document.querySelectorAll('body *')) {
+      if (el.hasAttribute(HIDE) || el.hasAttribute(UNSTICK)) continue;
       const { position } = getComputedStyle(el);
       if (position !== 'fixed' && position !== 'sticky') continue;
       if (el.contains(scroller)) continue;
-      hidden.push([el, el.style.getPropertyValue('visibility'), el.style.getPropertyPriority('visibility')]);
-      el.style.setProperty('visibility', 'hidden', 'important');
+      el.setAttribute(position === 'fixed' ? HIDE : UNSTICK, '');
     }
   }
 
   return {
     prepare() {
       scroller = findScroller();
-      isDocument = scroller === (document.scrollingElement || document.documentElement);
+      isDocument = scroller === rootScroller();
       saved = {
         top: scroller.scrollTop,
         left: scroller.scrollLeft,
         behavior: scroller.style.getPropertyValue('scroll-behavior'),
       };
       scroller.style.setProperty('scroll-behavior', 'auto', 'important');
-      return { region: region(), viewportWidth: innerWidth, clientHeight: scroller.clientHeight };
+      sheet = document.createElement('style');
+      sheet.textContent = `[${HIDE}] { visibility: hidden !important; }
+        [${UNSTICK}] { position: relative !important; inset: auto !important; }`;
+      document.documentElement.append(sheet);
+      return { region: region(), viewportWidth: innerWidth, clientHeight: scroller.clientHeight, scrollHeight: scroller.scrollHeight };
     },
 
     async scrollTo(y) {
-      if (y > 0 && hidden.length === 0) hideFloating();
       scroller.scrollTop = y;
       await nextFrame();
       // Gives lazy images and scroll-triggered layout a moment to settle.
       await wait(150);
+      if (y > 0) {
+        neutralizeFloating();
+        await nextFrame();
+      }
       return { top: scroller.scrollTop, scrollHeight: scroller.scrollHeight, region: region() };
     },
 
     restore() {
-      for (const [el, value, priority] of hidden) {
-        if (value) el.style.setProperty('visibility', value, priority);
-        else el.style.removeProperty('visibility');
+      for (const el of document.querySelectorAll(`[${HIDE}], [${UNSTICK}]`)) {
+        el.removeAttribute(HIDE);
+        el.removeAttribute(UNSTICK);
       }
-      hidden.length = 0;
-      if (saved.behavior) scroller.style.setProperty('scroll-behavior', saved.behavior);
-      else scroller.style.removeProperty('scroll-behavior');
+      sheet?.remove();
+      // Position first, then behaviour, so a smooth-scrolling page jumps back
+      // instead of animating.
       scroller.scrollTop = saved.top;
       scroller.scrollLeft = saved.left;
+      if (saved.behavior) scroller.style.setProperty('scroll-behavior', saved.behavior);
+      else scroller.style.removeProperty('scroll-behavior');
     },
   };
 })();
