@@ -7,8 +7,10 @@
 //
 // Window capture is not covered: it needs the system picker and a human.
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
+import { crc32, deflateSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -101,11 +103,107 @@ async function waitFor(fn, what, ms = 30_000) {
   throw new Error(`timed out waiting for ${what}`);
 }
 
-const server = createServer((req, res) => {
-  const page = PAGES[new URL(req.url, 'http://x').pathname];
+// A solid-colour PNG, built by hand so the test needs no image library.
+function png(width, height, [r, g, b]) {
+  const chunk = (type, data) => {
+    const out = Buffer.alloc(12 + data.length);
+    out.writeUInt32BE(data.length, 0);
+    out.write(type, 4, 'latin1');
+    data.copy(out, 8);
+    out.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type, 'latin1'), data])), 8 + data.length);
+    return out;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([8, 2, 0, 0, 0], 8);
+  const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: width }, () => [r, g, b]).flat())]);
+  const raw = Buffer.concat(Array.from({ length: height }, () => row));
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+const LAZY = '#00c853';
+// Served slowly, as a real network image would be.
+const lazyPng = png(400, 300, [0x00, 0xc8, 0x53]);
+// Below the fold, so a one-pass render without scrolling sees a blank.
+PAGES['/lazy'] = `<body style="margin:0"><div style="height:5000px;background:${BANDS[0]}"></div>
+  <img loading="lazy" src="/lazy.png" width="400" height="300" style="display:block">
+  <div style="height:1000px;background:${BANDS[1]}"></div></body>`;
+
+const SHARE_DIR = join(EXT, 'share');
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
+const server = createServer(async (req, res) => {
+  const { pathname } = new URL(req.url, 'http://x');
+  if (pathname === '/lazy.png') {
+    await sleep(300);
+    res.writeHead(200, { 'content-type': 'image/png' });
+    return res.end(lazyPng);
+  }
+  if (pathname.startsWith('/share/')) {
+    const file = pathname === '/share/' ? 'index.html' : pathname.slice('/share/'.length);
+    if (!/^[\w.-]+$/.test(file)) return res.writeHead(404).end();
+    try {
+      const body = await readFile(join(SHARE_DIR, file));
+      res.writeHead(200, { 'content-type': TYPES[file.slice(file.lastIndexOf('.'))] || 'application/octet-stream' });
+      return res.end(body);
+    } catch {
+      return res.writeHead(404).end();
+    }
+  }
+  const page = PAGES[pathname];
   res.writeHead(page ? 200 : 404, { 'content-type': 'text/html' });
   res.end(page || 'not found');
 });
+
+// A minimal WebTorrent-style tracker (the same announce/offer/answer relay the
+// public trackers run), so the share test needs no network. It records every
+// relayed message so the test can check nothing readable passed through it.
+const relayed = [];
+const swarms = new Map();
+const tracker = createServer();
+tracker.on('upgrade', (req, socket) => {
+  const accept = createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+  socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+  const send = (obj) => {
+    const data = Buffer.from(JSON.stringify(obj));
+    const head = data.length < 126 ? Buffer.from([0x81, data.length])
+      : data.length < 65536 ? Buffer.from([0x81, 126, data.length >> 8, data.length & 255])
+      : Buffer.concat([Buffer.from([0x81, 127]), (() => { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(data.length)); return b; })()]);
+    if (!socket.destroyed) socket.write(Buffer.concat([head, data]));
+  };
+  let buffer = Buffer.alloc(0);
+  socket.on('data', (chunk) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    while (buffer.length >= 2) {
+      const op = buffer[0] & 15;
+      let len = buffer[1] & 127;
+      let at = 2;
+      if (len === 126) { len = buffer.readUInt16BE(2); at = 4; } else if (len === 127) { len = Number(buffer.readBigUInt64BE(2)); at = 10; }
+      if (buffer.length < at + 4 + len) return;
+      const mask = buffer.subarray(at, at + 4);
+      const payload = Buffer.from(buffer.subarray(at + 4, at + 4 + len)).map((b, i) => b ^ mask[i % 4]);
+      buffer = buffer.subarray(at + 4 + len);
+      if (op === 8) return socket.end();
+      if (op !== 1) continue;
+      const msg = JSON.parse(payload.toString());
+      relayed.push(msg);
+      const swarm = swarms.get(msg.info_hash) ?? new Map();
+      swarms.set(msg.info_hash, swarm);
+      if (msg.event === 'stopped') { swarm.delete(msg.peer_id); continue; }
+      swarm.set(msg.peer_id, send);
+      if (msg.answer) {
+        swarm.get(msg.to_peer_id)?.({ action: 'announce', info_hash: msg.info_hash, peer_id: msg.peer_id, offer_id: msg.offer_id, answer: msg.answer });
+      }
+      for (const offer of msg.offers ?? []) {
+        for (const [peer, deliver] of swarm) {
+          if (peer !== msg.peer_id) deliver({ action: 'announce', info_hash: msg.info_hash, peer_id: msg.peer_id, offer_id: offer.offer_id, offer: offer.offer });
+        }
+      }
+    }
+  });
+  socket.on('error', () => {}); // a browser closing its tab drops the socket
+});
+await new Promise((r) => tracker.listen(0, '127.0.0.1', r));
+const trackerUrl = `ws://127.0.0.1:${tracker.address().port}`;
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const origin = `http://127.0.0.1:${server.address().port}`;
 
@@ -228,7 +326,30 @@ try {
   async function capture(path, mode, beforeViewer, setup) {
     const { page, popupSession, seen } = await openPopup(path, setup);
     await shoot(popupSession, `popup-${mode}`);
-    await evaluate(popupSession, `document.querySelector('[data-mode="${mode}"]').click()`);
+    // Stitched scrolling has no popup button; it is a shortcut-only mode, and
+    // the popup sends the same request its shortcut does.
+    await evaluate(popupSession, `(() => {
+      const button = document.querySelector('[data-mode="${mode}"]');
+      if (button) return button.click();
+      chrome.tabs.query({ active: true, currentWindow: true }).then(([t]) => chrome.runtime.sendMessage({ type: 'capture', mode: '${mode}', tabId: t.id }));
+    })()`);
+    // Samples what the popup shows while the capture runs.
+    const progress = [];
+    let watching = true;
+    const watcher = (async () => {
+      while (watching) {
+        // A closed popup never answers, so each poll gives up after a moment.
+        const seenNow = await Promise.race([
+          evaluate(popupSession, `(() => { const p = document.querySelector('.progress'); return p && !p.hidden ? p.querySelector('.progress-label').textContent + ' ' + p.querySelector('.progress-value').textContent : null; })()`).catch(() => null),
+          sleep(300).then(() => null),
+        ]);
+        if (seenNow && progress.at(-1) !== seenNow) {
+          progress.push(seenNow);
+          if (/\d+%/.test(seenNow) && progress.length === 3) await shoot(popupSession, `popup-progress-${mode}`).catch(() => {});
+        }
+        await sleep(40);
+      }
+    })();
     if (beforeViewer) await beforeViewer(page);
     const viewer = await waitFor(async () => (await targets()).find((t) => !seen.has(t.targetId) && t.url.includes('/src/viewer.html#')), 'viewer')
       .catch(async (e) => {
@@ -238,8 +359,10 @@ try {
     const viewerSession = await attach(viewer.targetId);
     await waitFor(() => evaluate(viewerSession, 'document.querySelector("main img")?.complete && document.querySelector("main img").naturalWidth > 0'), 'image');
     await shoot(viewerSession, `viewer-${mode}`);
+    watching = false;
+    await watcher;
     const state = await evaluate(page, `({ y: scrollY, pane: document.getElementById('pane')?.scrollTop ?? 0 })`);
-    return { viewer: viewerSession, page: { ...state, session: page } };
+    return { viewer: viewerSession, page: { ...state, session: page }, progress, viewerTarget: viewer.targetId };
   }
 
   // Returns [width, height, hex at each [x, y] in image pixels].
@@ -359,7 +482,7 @@ try {
   // into the image, and leaves the page as it was.
   {
     const { targetId, page, popupSession, seen } = await openPopup('/tall');
-    await evaluate(popupSession, `document.querySelector('[data-mode="scroll"]').click()`);
+    await evaluate(popupSession, `chrome.tabs.query({ active: true, currentWindow: true }).then(([t]) => { chrome.runtime.sendMessage({ type: 'capture', mode: 'scroll', tabId: t.id }); })`);
     await sleep(1500);
     const other = await cdp.send('Target.createTarget', { url: origin + '/wide' });
     const error = await waitFor(async () => {
@@ -395,6 +518,120 @@ try {
     check('window: captured the target window', w > 200 && h > 200 && near(colors[0], '#00ff00'), `${w}x${h} centre ${colors[0]}`);
     const pickerLeft = (await targets()).some((t) => t.url.endsWith('/src/window.html'));
     check('window: picker window closed', !pickerLeft);
+  }
+
+  // Full page loads lazy images before rendering, and the popup shows real
+  // progress while it does.
+  {
+    const { viewer, progress, page } = await capture('/lazy', 'full');
+    const lazyState = await evaluate(page.session, '(() => { const i = document.querySelector("img"); return `complete=${i.complete} natural=${i.naturalWidth}`; })()');
+    const [w, h, colors] = await sample(viewer, [[200 * DPR, 5150 * DPR], [20, 100 * DPR]]);
+    check('lazy: below-the-fold image loaded in the capture', colors[0] === LAZY, `${w}x${h} ${colors[0]} page img ${lazyState}`);
+    const percents = progress.map((p) => Number(p.match(/(\d+)%/)?.[1])).filter(Number.isFinite);
+    check('progress: popup showed rising percentages', percents.length >= 2 && percents.at(-1) > percents[0], progress.join(' | '));
+  }
+
+  // Viewer: 100% is one image pixel per device pixel, Fit never enlarges, and
+  // both download formats keep the full resolution.
+  {
+    const { viewer } = await capture('/long', 'visible');
+    const [nw, nh] = await sample(viewer, []);
+    const css = (q) => evaluate(viewer, `(() => { const i = document.querySelector('main img'); return ${q}; })()`);
+    await evaluate(viewer, 'document.querySelector(".zoom").click()');
+    const actual = await css('[i.getBoundingClientRect().width * devicePixelRatio, document.querySelector(".zoom").getAttribute("aria-pressed")]');
+    check('viewer 100%: one image pixel per device pixel', Math.abs(actual[0] - nw) <= 1 && actual[1] === 'true', `${actual[0]} device px for ${nw} px`);
+    await evaluate(viewer, 'document.querySelector(".zoom").click()');
+    const fit = await css('[i.getBoundingClientRect().width, document.querySelector(".stage").clientWidth]');
+    check('viewer Fit: within the window, never enlarged', fit[0] <= fit[1] && fit[0] * DPR <= nw + 1, `${fit[0]} of ${fit[1]} css px`);
+
+    const downloads = await mkdtemp(join(tmpdir(), 'pagesnap-downloads-'));
+    await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads });
+    const fileOf = (ext) => waitFor(async () => (await readdir(downloads)).find((f) => f.endsWith(ext)), `${ext} download`);
+    await evaluate(viewer, 'document.querySelector(".download").click()');
+    const pngFile = await readFile(join(downloads, await fileOf('.png')));
+    const pngDims = [pngFile.readUInt32BE(16), pngFile.readUInt32BE(20)];
+    check('download PNG: full resolution', pngDims[0] === nw && pngDims[1] === nh, pngDims.join('x'));
+    await evaluate(viewer, 'document.querySelector(".more").click(); document.querySelector(\'[data-format="jpeg"]\').click()');
+    const jpg = await readFile(join(downloads, await fileOf('.jpg')));
+    // Width and height sit in the first SOF marker of a JPEG.
+    let jpgDims = null;
+    for (let i = 2; i < jpg.length - 9 && !jpgDims;) {
+      const marker = jpg[i + 1];
+      if (marker >= 0xc0 && marker <= 0xc3) jpgDims = [jpg.readUInt16BE(i + 7), jpg.readUInt16BE(i + 5)];
+      i += 2 + jpg.readUInt16BE(i + 2);
+    }
+    check('download JPG: full resolution', jpgDims?.[0] === nw && jpgDims?.[1] === nh, String(jpgDims));
+    await rm(downloads, { recursive: true, force: true });
+  }
+
+  // Share: the image goes peer to peer through the local tracker; both sides
+  // agree on the code, the bytes arrive intact, nothing readable crosses the
+  // tracker, and the key leaves the recipient's address bar.
+  {
+    const { viewer, viewerTarget } = await capture('/long', 'visible');
+    // PAGESNAP_LIVE=1 uses the real public trackers and STUN servers, as
+    // shipped links do; otherwise everything stays on this machine.
+    const LIVE = process.env.PAGESNAP_LIVE === '1';
+    const receiverUrl = LIVE ? `${origin}/share/` : `${origin}/share/?tracker=${encodeURIComponent(trackerUrl)}`;
+    await evaluate(viewer, `chrome.storage.local.set(${JSON.stringify(LIVE ? { receiverUrl } : { receiverUrl, trackers: [trackerUrl], iceServers: [] })})`);
+    await evaluate(viewer, 'location.reload()');
+    await sleep(300);
+    const sender = await attach(viewerTarget);
+    await waitFor(() => evaluate(sender, '!document.querySelector(".share")?.hidden'), 'share button');
+    const original = await evaluate(sender, `(async () => {
+      const blob = await (await fetch(document.querySelector('main img').src)).blob();
+      return [...new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()))].map((b) => b.toString(16).padStart(2, '0')).join('');
+    })()`);
+
+    const openShare = async () => {
+      await evaluate(sender, 'document.querySelector(".share").click()');
+      return waitFor(() => evaluate(sender, 'document.querySelector(".sheet .link").value || null'), 'share link');
+    };
+    const openReceiver = async (link) => {
+      const { targetId } = await cdp.send('Target.createTarget', { url: link });
+      const session = await attach(targetId);
+      await waitFor(() => evaluate(session, 'document.readyState === "complete"'), 'receiver page');
+      return session;
+    };
+
+    const link = await openShare();
+    await sleep(300);
+    await shoot(sender, 'share-waiting');
+    check('share: link carries only a 22-character key in the fragment', /#[A-Za-z0-9_-]{22}$/.test(link), link.replace(/#.*/, '#…'));
+    const receiver = await openReceiver(link);
+    const cleared = await waitFor(() => evaluate(receiver, 'location.hash === "" && location.href.startsWith("http")'), 'key cleared', 5000).catch(() => false);
+    check('share: key removed from the recipient\'s address bar', cleared, await evaluate(receiver, 'location.href.replace(/#.+/, "#…")'));
+    const receiverCode = await waitFor(() => evaluate(receiver, 'document.querySelector(".code").textContent || null'), 'receiver code', 20_000);
+    const senderCode = await waitFor(() => evaluate(sender, '!document.querySelector(".request").hidden && document.querySelector(".sheet .code").textContent'), 'sender code', 20_000);
+    check('share: both sides show the same code', /^\d{4}$/.test(receiverCode) && receiverCode === senderCode, `${senderCode} / ${receiverCode}`);
+    await shoot(sender, 'share-request');
+    await shoot(receiver, 'receiver-code');
+    await evaluate(sender, 'document.querySelector(".sheet .send").click()');
+    await waitFor(() => evaluate(receiver, '!document.querySelector(".result").hidden'), 'image received', 20_000);
+    // The receiver page's CSP rightly blocks fetch(), so the bytes are checked
+    // the way a recipient gets them: through its Download link.
+    const inbox = await mkdtemp(join(tmpdir(), 'pagesnap-inbox-'));
+    await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: inbox });
+    await evaluate(receiver, 'document.querySelector(".result .download").click()');
+    const file = await waitFor(async () => (await readdir(inbox)).find((f) => f.endsWith('.png')), 'received download');
+    const received = createHash('sha256').update(await readFile(join(inbox, file))).digest('hex');
+    await rm(inbox, { recursive: true, force: true });
+    check('share: received bytes identical to the capture', received === original, `${received.slice(0, 12)} / ${original.slice(0, 12)}`);
+    await waitFor(() => evaluate(sender, '!document.querySelector(".sent").hidden'), 'sender sees sent');
+    await shoot(sender, 'share-sent');
+    await shoot(receiver, 'receiver-result');
+    check('share: link is one-time', (await evaluate(sender, 'document.querySelector(".sheet .link").value')) === '');
+    const plain = relayed.filter((m) => /v=0|a=fingerprint|a=candidate/.test(JSON.stringify(m)));
+    if (!LIVE) check('share: tracker never saw a readable connection offer', relayed.some((m) => m.offers?.length) && plain.length === 0, `${relayed.length} messages, ${plain.length} readable`);
+
+    // Decline: a second link, and the recipient is turned away.
+    await evaluate(sender, 'document.querySelector(".sheet .stop").click()');
+    const second = await openReceiver(await openShare());
+    await waitFor(() => evaluate(sender, '!document.querySelector(".request").hidden'), 'second request', 20_000);
+    await evaluate(sender, 'document.querySelector(".sheet .decline").click()');
+    const declined = await waitFor(() => evaluate(second, 'document.querySelector("h1").textContent.includes("declined") && document.querySelector("h1").textContent'), 'declined', 10_000);
+    check('share: declined recipient receives nothing', declined && (await evaluate(second, 'document.querySelector(".result").hidden')), declined);
+    await evaluate(sender, 'document.querySelector(".sheet .stop").click()');
   }
 
   // Visible area.
@@ -433,6 +670,7 @@ try {
 } finally {
   browser.kill();
   server.close();
+  tracker.close();
   await rm(profile, { recursive: true, force: true }).catch(() => {}); // best effort: the browser may still hold files
 }
 

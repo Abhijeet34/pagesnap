@@ -9,6 +9,9 @@ const MAX_AREA = 16384 * 16384;
 // taller full-page shots are taken in tiles.
 const MAX_TILE = 16384;
 const MAX_FRAMES = 200;
+// Bounds on the lazy-load pass before a full-page render.
+const WARM_STEPS = 60;
+const WARM_SETTLE_MS = 3000;
 const MODES = ['visible', 'full', 'scroll', 'area', 'window'];
 const EXTENSION_ORIGIN = chrome.runtime.getURL('');
 
@@ -70,7 +73,31 @@ async function run(mode, tabId) {
     await { visible: captureVisible, full: captureFull, scroll: captureScroll }[mode](tab);
   } finally {
     busy.delete(tab.id);
+    await endProgress(tab);
   }
+}
+
+// Progress lives in session storage, so a popup opened mid-capture picks it
+// up, and on the tab's badge, which shows it when no popup is open. `value`
+// is 0..1, or null while the length of a step is unknown.
+const PROGRESS_STEP_MS = 150;
+const lastProgress = new Map();
+
+async function progress(tab, label, value = null) {
+  const now = Date.now();
+  // Badge and storage writes are cheap but not free; a few per second is plenty.
+  if (value !== null && value < 1 && now - (lastProgress.get(tab.id) ?? 0) < PROGRESS_STEP_MS) return;
+  lastProgress.set(tab.id, now);
+  await chrome.storage.session.set({ [`progress:${tab.id}`]: { label, value } });
+  await chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: '#3a5cf5' });
+  await chrome.action.setBadgeText({ tabId: tab.id, text: value === null ? '…' : `${Math.round(value * 100)}%` });
+}
+
+async function endProgress(tab) {
+  lastProgress.delete(tab.id);
+  await chrome.storage.session.remove(`progress:${tab.id}`);
+  // null hands the badge back to the global one, which carries any error.
+  await chrome.action.setBadgeText({ tabId: tab.id, text: null }).catch(() => {}); // best effort: the tab may have closed
 }
 
 // captureVisibleTab grabs whatever tab is showing in the window, so every grab
@@ -113,6 +140,7 @@ async function pngSize(blob) {
 }
 
 async function save(tab, mode, blob, width, height, note = '') {
+  await progress(tab, 'Saving');
   const id = await putShot(blob, { mode, width, height, note, title: tab.title || '', url: tab.url || '' });
   await chrome.tabs.create({ url: `src/viewer.html#${id}`, index: tab.index + 1, openerTabId: tab.id, windowId: tab.windowId });
 }
@@ -167,12 +195,18 @@ async function captureFull(tab) {
   if (probe.inner) return captureScroll(tab);
   let shot = null;
   try {
+    await warm(tab);
     const target = { tabId: tab.id };
     let attached = false;
     try {
       await chrome.debugger.attach(target, '1.3');
       attached = true;
-      shot = await renderFull((method, params) => chrome.debugger.sendCommand(target, method, params), probe.dpr);
+      await progress(tab, 'Capturing', 0.5);
+      shot = await renderFull(
+        (method, params) => chrome.debugger.sendCommand(target, method, params),
+        probe.dpr,
+        (done) => progress(tab, 'Capturing', 0.5 + done * 0.45),
+      );
     } catch (e) {
       // The scroll capture below still gets the page.
       console.warn('PageSnap: full-page render failed, falling back to scrolling capture', e);
@@ -186,7 +220,23 @@ async function captureFull(tab) {
   await save(tab, 'full', shot.blob, shot.width, shot.height);
 }
 
-async function renderFull(send, dpr) {
+// Scrolls down the page once so lazy images load, then back to the top.
+// Counts as the first half of the progress bar.
+async function warm(tab) {
+  let y = 0;
+  for (let step = 0; step < WARM_STEPS; step++) {
+    const pos = await inPage(tab.id, (to) => globalThis.__pagesnap.peek(to), [y]);
+    const end = pos.top + pos.clientHeight >= pos.scrollHeight - 1;
+    await progress(tab, 'Loading the whole page', Math.min(1, (pos.top + pos.clientHeight) / pos.scrollHeight) * 0.5);
+    // Offsets snap to device pixels, so at fractional ratios the page lands a
+    // fraction short of the requested position; only a real stall ends it.
+    if (end || pos.top < y - 1) break;
+    y = pos.top + pos.clientHeight;
+  }
+  await inPage(tab.id, (ms) => globalThis.__pagesnap.settle(ms), [WARM_SETTLE_MS]);
+}
+
+async function renderFull(send, dpr, onProgress) {
   if (!(dpr > 0 && dpr <= 16)) throw new Error(`Unexpected device pixel ratio ${dpr}`);
   const { cssContentSize: css } = await send('Page.getLayoutMetrics');
   const width = Math.max(1, Math.ceil(css.width));
@@ -211,6 +261,7 @@ async function renderFull(send, dpr) {
   const canvas = new OffscreenCanvas(Math.round(width * ratio), Math.round(height * ratio));
   const ctx = canvas.getContext('2d');
   for (let y = 0; y < height; y += tileHeight) {
+    await onProgress(y / height);
     const bitmap = await createImageBitmap(await shoot(y, Math.min(tileHeight, height - y)));
     try {
       ctx.drawImage(bitmap, 0, Math.round(y * ratio));
@@ -280,6 +331,7 @@ async function captureScroll(tab) {
         }
         ctx.drawImage(bitmap, sx, sy, sw, sh, 0, y0, canvas.width, y1 - y0);
         bottom = Math.min(y1, cap);
+        await progress(tab, 'Capturing', Math.min(0.95, (pos.top + region.h) / pos.scrollHeight));
         if (cut || atEnd) break;
         // One CSS pixel of overlap: at fractional ratios the next offset can
         // snap just past this frame's bottom and leave a gap row.

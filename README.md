@@ -3,26 +3,33 @@
 A screenshot extension for Chromium browsers (Brave, Chrome, Edge).
 No dependencies, no build step, no network access.
 
-| Mode | Shortcut | How it works |
+| Option | Shortcut | What you get |
 | --- | --- | --- |
-| Full page | `Alt+Shift+F` | One render of the whole document through the DevTools protocol, like DevTools' "Capture full size screenshot". |
-| Scrolling capture | `Alt+Shift+S` | Scrolls the page (or the main inner scroll pane on app-style pages) and stitches the frames; fixed and sticky bars appear once. |
-| Visible area | `Alt+Shift+V` | The current viewport. |
-| Select area | `Alt+Shift+A` | Drag a rectangle over the viewport; `Esc` cancels. |
-| Window or screen | none | Pick any window or screen from the system picker. |
+| Full page | `Alt+Shift+F` | The whole page. It scrolls through once so lazy images load, then renders the document in one pass (the DevTools "Capture full size screenshot" path). App layouts that scroll an inner pane are stitched from that pane instead. |
+| Visible area | `Alt+Shift+V` | What is on screen. |
+| Select area | `Alt+Shift+A` | Drag a rectangle; `Esc` cancels. |
+| Window or screen | none | Any window or screen, from the system picker. |
 
-Each capture opens in a viewer tab with Copy, JPEG and Download PNG.
-Shots stay in the browser's local storage, never leave the machine, and are deleted after 24 hours or once there are more than 20.
+A stitched full-page capture that never shows the browser's debugging bar is available as a shortcut you can assign at `brave://extensions/shortcuts`.
 
-## Security
+The popup and the toolbar badge show progress while a capture runs.
+Each capture opens in a viewer: Fit or 100% (one image pixel per screen pixel), Copy (`⌘C`), Download as PNG (`⌘S`) or JPG, both at full resolution, and Share.
+Shots stay in the browser's local storage and are deleted after 24 hours or once there are more than 20.
 
-- No network access: no host permissions, no remote code, and the default Manifest V3 content security policy.
-- Web pages cannot message the extension (no `externally_connectable`, no web-accessible resources).
-- A capture can only be started from the extension's own popup or a keyboard shortcut, and only on the tab you are on (`activeTab`).
-  An area selection only counts if you started it, and synthetic mouse events from the page are ignored.
-- Page measurements are taken in the extension's isolated script world, so a page cannot feed it false values.
-- `debugger` is attached only during a Full page capture of the current tab and always detached afterwards.
-- If a capture is interrupted, the page restores its own scroll position and styling within 10 seconds (60 for Full page).
+## Sharing
+
+Share makes a one-time link, like `https://<receiver page>/#<22 characters>`.
+The image goes straight from your open viewer tab to the person who opens it, over an encrypted WebRTC connection; nothing is uploaded or stored anywhere.
+
+- The 128-bit key sits after `#`, which browsers never send to a server. The receiver page removes it from the address bar and history as it loads.
+- Public WebTorrent trackers introduce the two browsers. What passes through them is encrypted and authenticated with the key, so a tracker can neither read it nor put itself in the middle.
+- The image is encrypted with the key as well, on top of WebRTC's DTLS.
+- Both screens show a 4-digit code. Nothing is sent until you check it with the recipient and press Send. A forwarded link gets you a request you can decline.
+- The link works once, for at most 10 minutes, and only while the share dialog is open.
+
+What it cannot hide: the trackers and STUN servers see both IP addresses, the time, and roughly how big the transfer is. A small share of networks block direct connections; without a relay server those transfers fail, and the receiver page says so.
+
+The receiver page is `share/` in this repository, a static page with no third-party code, a strict content security policy and no referrer.
 
 ## Install
 
@@ -46,9 +53,14 @@ Shots stay in the browser's local storage, never leave the machine, and are dele
 ```sh
 npm test                      # headless Brave, at 2x and 1.5x pixel ratios
 npm run test:headed           # a visible window; also covers Window or screen
+PAGESNAP_LIVE=1 node test/e2e.mjs   # Share through the real public trackers
 node test/e2e.mjs /path/to/chrome
 PAGESNAP_SHOTS=/tmp/shots npm test   # also saves the popup and viewer as PNGs
 ```
 
-The test loads the extension into a throwaway profile, opens the real popup, and checks the captured pixels.
+The test loads the extension into a throwaway profile, opens the real popup, and checks the captured pixels, progress, downloads, and a full share between two tabs through a local tracker.
 The headed run answers the window picker with a flag that selects the test's own window by title, so nothing else on screen is captured; on macOS it needs Screen Recording allowed for Brave.
+
+## Credits
+
+Interface icons are from [Lucide](https://lucide.dev) 0.460.0, ISC licence (`icons/LUCIDE-LICENSE`).

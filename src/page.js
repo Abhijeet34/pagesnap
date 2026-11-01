@@ -156,6 +156,29 @@ globalThis.__pagesnap = (() => {
       return { inner: false, dpr: devicePixelRatio };
     },
 
+    // Full page renders the document in one pass, which skips images that load
+    // only when scrolled into view; a quick pass down the page loads them.
+    async peek(y) {
+      arm();
+      const root = rootScroller();
+      root.scrollTop = y;
+      await nextFrame();
+      await wait(80);
+      return { top: root.scrollTop, scrollHeight: root.scrollHeight, clientHeight: root.clientHeight };
+    },
+
+    // Waits, at most `ms`, for images that started loading during the pass.
+    async settle(ms) {
+      arm();
+      const pending = [...document.images].filter((img) => !img.complete);
+      await Promise.race([
+        Promise.all(pending.map((img) => new Promise((r) => { img.addEventListener('load', r, { once: true }); img.addEventListener('error', r, { once: true }); }))),
+        wait(ms),
+      ]);
+      rootScroller().scrollTop = 0;
+      await nextFrame();
+    },
+
     prepare() {
       scroller = findScroller();
       isDocument = scroller === rootScroller();

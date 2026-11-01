@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Nothing but this page's own files and tracker WebSockets; the image
+       arrives over WebRTC and is shown from a blob: URL. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src wss: ws://127.0.0.1:* ws://localhost:*; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <title>Shared screenshot</title>
+  <link rel="icon" href="icon.svg">
+  <link rel="stylesheet" href="receive.css">
+</head>
+<body>
+  <main>
+    <header class="brand"><img src="icon.svg" alt="" width="20" height="20"><span>PageSnap</span></header>
+    <section class="card" aria-live="polite">
+      <h1>Receiving a screenshot</h1>
+      <p class="status">Connecting to the sender…</p>
+      <div class="code-block" hidden>
+        <p>Tell the sender this code. They'll send the image once it matches.</p>
+        <div class="code"></div>
+      </div>
+      <div class="bar" hidden><div class="fill"></div></div>
+      <div class="result" hidden>
+        <img alt="Shared screenshot">
+        <div class="actions"><a class="download" download>Download</a></div>
+      </div>
+      <p class="note">Sent directly from the sender's browser. Nothing is uploaded or stored.</p>
+    </section>
+  </main>
+  <script src="receive.js" type="module"></script>
+</body>
+</html>

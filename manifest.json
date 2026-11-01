@@ -6,11 +6,16 @@
   "minimum_chrome_version": "116",
   "permissions": ["activeTab", "scripting", "debugger", "desktopCapture", "clipboardWrite", "storage"],
   "background": { "service_worker": "src/background.js", "type": "module" },
-  "action": { "default_popup": "src/popup.html", "default_title": "PageSnap" },
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "PageSnap",
+    "default_icon": { "16": "icons/16.png", "32": "icons/32.png" }
+  },
   "commands": {
     "visible": { "suggested_key": { "default": "Alt+Shift+V" }, "description": "Capture the visible part of the page" },
     "full": { "suggested_key": { "default": "Alt+Shift+F" }, "description": "Capture the full page" },
-    "scroll": { "suggested_key": { "default": "Alt+Shift+S" }, "description": "Capture by scrolling and stitching" },
+    "scroll": { "description": "Capture the full page by scrolling, without the debugging bar" },
     "area": { "suggested_key": { "default": "Alt+Shift+A" }, "description": "Capture a selected area" },
     "window": { "description": "Capture a window or screen" }
   }
