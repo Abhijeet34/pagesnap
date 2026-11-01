@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "PageSnap",
+  "version": "0.1.0",
+  "description": "Full page, scrolling, visible, area and window screenshots.",
+  "minimum_chrome_version": "116",
+  "permissions": ["activeTab", "scripting", "debugger", "desktopCapture", "clipboardWrite"],
+  "background": { "service_worker": "src/background.js", "type": "module" },
+  "action": { "default_popup": "src/popup.html", "default_title": "PageSnap" },
+  "commands": {
+    "visible": { "suggested_key": { "default": "Alt+Shift+V" }, "description": "Capture the visible part of the page" },
+    "full": { "suggested_key": { "default": "Alt+Shift+F" }, "description": "Capture the full page" },
+    "scroll": { "suggested_key": { "default": "Alt+Shift+S" }, "description": "Capture by scrolling and stitching" },
+    "area": { "suggested_key": { "default": "Alt+Shift+A" }, "description": "Capture a selected area" },
+    "window": { "description": "Capture a window or screen" }
+  }
+}
