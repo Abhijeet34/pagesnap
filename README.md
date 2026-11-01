@@ -56,6 +56,7 @@ Whoever controls that repository controls the page recipients run, so the accoun
 npm test                      # headless Brave, at 2x and 1.5x pixel ratios
 npm run test:headed           # a visible window; also covers Window or screen
 PAGESNAP_LIVE=1 node test/e2e.mjs   # Share through the real public trackers
+npm run test:published        # Share to the published receiver with shipped settings
 node test/e2e.mjs /path/to/chrome
 PAGESNAP_SHOTS=/tmp/shots npm test   # also saves the popup and viewer as PNGs
 ```

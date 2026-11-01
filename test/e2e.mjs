@@ -571,9 +571,13 @@ try {
     const { viewer, viewerTarget } = await capture('/long', 'visible');
     // PAGESNAP_LIVE=1 uses the real public trackers and STUN servers, as
     // shipped links do; otherwise everything stays on this machine.
-    const LIVE = process.env.PAGESNAP_LIVE === '1';
+    // PAGESNAP_PUBLISHED=1 goes further: no overrides at all, so the shipped
+    // receiver page, trackers and STUN servers are exactly what is tested.
+    const LIVE = process.env.PAGESNAP_LIVE === '1' || process.env.PAGESNAP_PUBLISHED === '1';
     const receiverUrl = LIVE ? `${origin}/share/` : `${origin}/share/?tracker=${encodeURIComponent(trackerUrl)}`;
-    await evaluate(viewer, `chrome.storage.local.set(${JSON.stringify(LIVE ? { receiverUrl } : { receiverUrl, trackers: [trackerUrl], iceServers: [] })})`);
+    if (process.env.PAGESNAP_PUBLISHED !== '1') {
+      await evaluate(viewer, `chrome.storage.local.set(${JSON.stringify(LIVE ? { receiverUrl } : { receiverUrl, trackers: [trackerUrl], iceServers: [] })})`);
+    }
     await evaluate(viewer, 'location.reload()');
     await sleep(300);
     const sender = await attach(viewerTarget);
