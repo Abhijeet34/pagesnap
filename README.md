@@ -30,6 +30,8 @@ The image goes straight from your open viewer tab to the person who opens it, ov
 What it cannot hide: the trackers and STUN servers see both IP addresses, the time, and roughly how big the transfer is. A small share of networks block direct connections; without a relay server those transfers fail, and the receiver page says so.
 
 The receiver page is `share/` in this repository, a static page with no third-party code, a strict content security policy and no referrer.
+It is published at `https://abhijeet34.github.io/pagesnap-share/` from the `Abhijeet34/pagesnap-share` repository; after changing `share/`, copy its files there and push.
+Whoever controls that repository controls the page recipients run, so the account needs two-factor authentication.
 
 ## Install
 
