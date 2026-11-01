@@ -555,6 +555,17 @@ try {
   {
     const { viewer } = await capture('/long', 'visible');
     const [nw, nh] = await sample(viewer, []);
+    // The format menu's two-line items must each get their own room.
+    await evaluate(viewer, 'document.querySelector("#formats").showPopover()');
+    await shoot(viewer, 'viewer-menu');
+    const menu = await evaluate(viewer, `(() => {
+      const m = document.querySelector('#formats');
+      const [a, b] = [...m.querySelectorAll('button')].map((x) => x.getBoundingClientRect());
+      const fits = [...m.querySelectorAll('button')].every((x) => x.scrollHeight <= x.clientHeight);
+      return { apart: a.bottom <= b.top, fits, scrolls: m.scrollHeight > m.clientHeight };
+    })()`);
+    await evaluate(viewer, 'document.querySelector("#formats").hidePopover()');
+    check('viewer menu: items neither overlap nor scroll', menu.apart && menu.fits && !menu.scrolls, JSON.stringify(menu));
     const css = (q) => evaluate(viewer, `(() => { const i = document.querySelector('main img'); return ${q}; })()`);
     await evaluate(viewer, 'document.querySelector(".zoom").click()');
     const actual = await css('[i.getBoundingClientRect().width * devicePixelRatio, document.querySelector(".zoom").getAttribute("aria-pressed")]');
@@ -562,6 +573,14 @@ try {
     await evaluate(viewer, 'document.querySelector(".zoom").click()');
     const fit = await css('[i.getBoundingClientRect().width, document.querySelector(".stage").clientWidth]');
     check('viewer Fit: within the window, never enlarged', fit[0] <= fit[1] && fit[0] * DPR <= nw + 1, `${fit[0]} of ${fit[1]} css px`);
+    // A full page is as wide as the window it came from; at Fit it must stay
+    // pixel for pixel, since even a 3% shrink resamples and blurs the text.
+    {
+      const { viewer: full } = await capture('/long', 'full');
+      const [fw] = await sample(full, []);
+      const shown = await evaluate(full, 'document.querySelector("main img").getBoundingClientRect().width * devicePixelRatio');
+      check('viewer Fit: a window-wide capture shows pixel for pixel', Math.abs(shown - fw) <= 1, `${shown} device px for ${fw} px`);
+    }
 
     const downloads = await mkdtemp(join(tmpdir(), 'pagesnap-downloads-'));
     await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads });
