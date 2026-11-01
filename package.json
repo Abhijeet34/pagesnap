@@ -5,6 +5,7 @@
   "scripts": {
     "test": "node test/e2e.mjs && PAGESNAP_DPR=1.5 node test/e2e.mjs",
     "test:headed": "PAGESNAP_HEADED=1 node test/e2e.mjs",
-    "test:published": "PAGESNAP_PUBLISHED=1 node test/e2e.mjs"
+    "test:published": "PAGESNAP_PUBLISHED=1 node test/e2e.mjs",
+    "publish:share": "scripts/publish-share.sh"
   }
 }
