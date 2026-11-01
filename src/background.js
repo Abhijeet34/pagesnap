@@ -89,7 +89,7 @@ async function progress(tab, label, value = null) {
   if (value !== null && value < 1 && now - (lastProgress.get(tab.id) ?? 0) < PROGRESS_STEP_MS) return;
   lastProgress.set(tab.id, now);
   await chrome.storage.session.set({ [`progress:${tab.id}`]: { label, value, at: now } });
-  await chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: '#3a5cf5' });
+  await chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: '#1c1c1e' });
   await chrome.action.setBadgeText({ tabId: tab.id, text: value === null ? '…' : `${Math.round(value * 100)}%` });
 }
 

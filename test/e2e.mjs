@@ -272,9 +272,12 @@ try {
     }
   };
 
-  // PAGESNAP_SHOTS=<dir> saves the popup and viewer as PNGs for a visual check.
+  // PAGESNAP_SHOTS=<dir> saves the popup and viewer as PNGs for a visual check;
+  // PAGESNAP_SCHEME=light|dark shoots them in that colour scheme.
   const shoot = async (session, name) => {
     if (!process.env.PAGESNAP_SHOTS) return;
+    const scheme = process.env.PAGESNAP_SCHEME;
+    if (scheme) await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] }, session);
     const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' }, session);
     await writeFile(join(process.env.PAGESNAP_SHOTS, `${name}.png`), Buffer.from(data, 'base64'));
   };

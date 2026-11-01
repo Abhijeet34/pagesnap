@@ -31,7 +31,7 @@ function fail(heading, text) {
 const revisited = ['reload', 'back_forward'].includes(performance.getEntriesByType('navigation')[0]?.type);
 
 if (revisited && !secret) {
-  fail('This page was reloaded', 'The key leaves the address bar as soon as the page opens, so it can\'t reconnect. Open the original link again.');
+  fail('This page was reloaded', 'Reloading drops the link’s key. Open the original link again.');
 } else if (!secret) {
   fail('This link has no key', 'The part after # is missing. Ask the sender to copy the whole link again.');
 } else if (!isSecret(secret)) {
@@ -58,7 +58,7 @@ if (revisited && !secret) {
         const url = URL.createObjectURL(s.blob);
         bar.hidden = true;
         title.textContent = 'Screenshot received';
-        status.textContent = `Code ${s.code}. Check the sender saw this code. The image lives only in this tab; download it to keep it.`;
+        status.textContent = `Code ${s.code}. Download it to keep it; closing this tab discards it.`;
         result.querySelector('img').src = url;
         const link = result.querySelector('.download');
         link.href = url;

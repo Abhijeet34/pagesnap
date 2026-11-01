@@ -1,17 +1,19 @@
-/* Tokens. Graphite neutrals with one cobalt accent, so the popup sits quietly
-   in the browser's own chrome; system type for the same reason. */
+/* Tokens. Untinted greys and one ink colour, near-black in light mode and
+   near-white in dark, for the main action: the screenshot is the only colour
+   on screen, and the UI sits in the browser's own chrome like part of it.
+   System type for the same reason. */
 :root {
   color-scheme: light dark;
   --surface: oklch(100% 0 0);
-  --raised: oklch(98% 0.003 265);
-  --hover: oklch(95.5% 0.006 265);
-  --line: oklch(90% 0.006 265);
-  --text: oklch(23% 0.012 265);
-  --muted: oklch(50% 0.012 265);
-  --accent: oklch(53% 0.21 268);
-  --accent-text: oklch(99% 0 0);
+  --raised: oklch(98% 0 0);
+  --hover: oklch(95% 0 0);
+  --line: oklch(89% 0 0);
+  --text: oklch(21% 0 0);
+  --muted: oklch(48% 0 0);
+  --ink: oklch(21% 0 0);
+  --ink-text: oklch(99% 0 0);
   --error: oklch(52% 0.19 27);
-  --canvas: oklch(94% 0.004 265);
+  --canvas: oklch(94% 0 0);
   --shadow: 0 1px 2px oklch(0% 0 0 / 0.08), 0 6px 20px oklch(0% 0 0 / 0.12);
 
   --space-1: 4px;
@@ -30,16 +32,16 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --surface: oklch(22% 0.006 265);
-    --raised: oklch(25% 0.007 265);
-    --hover: oklch(29% 0.009 265);
-    --line: oklch(33% 0.009 265);
-    --text: oklch(94% 0.004 265);
-    --muted: oklch(72% 0.01 265);
-    --accent: oklch(68% 0.16 268);
-    --accent-text: oklch(16% 0.02 268);
+    --surface: oklch(21% 0 0);
+    --raised: oklch(24% 0 0);
+    --hover: oklch(28% 0 0);
+    --line: oklch(32% 0 0);
+    --text: oklch(95% 0 0);
+    --muted: oklch(70% 0 0);
+    --ink: oklch(95% 0 0);
+    --ink-text: oklch(18% 0 0);
     --error: oklch(72% 0.16 27);
-    --canvas: oklch(15% 0.004 265);
+    --canvas: oklch(14% 0 0);
     --shadow: 0 1px 2px oklch(0% 0 0 / 0.4), 0 8px 24px oklch(0% 0 0 / 0.45);
   }
 }
@@ -62,7 +64,7 @@ button {
   cursor: pointer;
 }
 
-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 button:disabled { cursor: default; }
 
 /* Icons are Lucide (ISC, icons/LUCIDE-LICENSE): one 24px grid, 2px stroke. */
@@ -140,7 +142,7 @@ kbd {
 
 .fill {
   height: 100%;
-  background: var(--accent);
+  background: var(--ink);
   transform: scaleX(0);
   transform-origin: left;
   transition: transform 240ms var(--ease-out);
@@ -203,13 +205,13 @@ kbd {
 .actions > button[aria-pressed="true"] { background: var(--hover); }
 
 .actions .split { display: inline-flex; margin-left: var(--space-1); }
-.actions .split button { background: var(--accent); color: var(--accent-text); }
-.actions .split button:hover { background: var(--accent); filter: brightness(1.08); }
+.actions .split button { background: var(--ink); color: var(--ink-text); }
+.actions .split button:hover { background: var(--ink); opacity: 0.88; }
 .actions .split .download { border-radius: var(--radius) 0 0 var(--radius); }
 .actions .split .more {
   padding: 0 var(--space-2);
   border-radius: 0 var(--radius) var(--radius) 0;
-  box-shadow: inset 1px 0 oklch(100% 0 0 / 0.25);
+  box-shadow: inset 1px 0 color-mix(in oklch, var(--ink-text) 30%, transparent);
   anchor-name: --download;
 }
 
@@ -274,16 +276,7 @@ kbd {
 }
 
 .sheet::backdrop { background: oklch(0% 0 0 / 0.35); }
-.sheet-head { display: flex; justify-content: space-between; align-items: flex-start; }
-
-.tile {
-  display: inline-grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius);
-  background: var(--hover);
-}
+.sheet-head { display: flex; justify-content: space-between; align-items: center; margin: -4px -8px var(--space-1) 0; }
 
 .sheet .close {
   display: inline-grid;
@@ -297,7 +290,7 @@ kbd {
 }
 
 .sheet .close:hover { background: var(--hover); color: var(--text); }
-.sheet h2 { margin: var(--space-3) 0 var(--space-1); font-size: 15px; font-weight: 600; text-wrap: balance; }
+.sheet h2 { margin: 0; font-size: 15px; font-weight: 600; text-wrap: balance; }
 .sheet .hint { margin: 0 0 var(--space-4); color: var(--muted); }
 
 .link-row {
@@ -324,11 +317,11 @@ kbd {
   padding: 0 var(--space-3);
   border: 0;
   border-radius: 6px;
-  background: var(--accent);
-  color: var(--accent-text);
+  background: var(--ink);
+  color: var(--ink-text);
 }
 
-.sheet button.copy-link:hover, .sheet button.primary:hover { filter: brightness(1.08); }
+.sheet button.copy-link:hover, .sheet button.primary:hover { opacity: 0.88; }
 
 .share-status {
   display: flex;
@@ -341,7 +334,7 @@ kbd {
 
 .share-status .text { flex: 1; }
 .share-status .timer { font-variant-numeric: tabular-nums; }
-.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink); }
 .share-status.live .dot { animation: pulse 1.6s var(--ease-out) infinite; }
 .share-status.error { color: var(--error); }
 .share-status.error .dot { background: var(--error); }
@@ -372,10 +365,10 @@ kbd {
 .sheet .stop:hover { text-decoration: underline; }
 .sheet .stop.finish { padding-left: var(--space-3); border-color: var(--line); color: var(--text); }
 .sheet .stop.finish:hover { text-decoration: none; background: var(--hover); }
-.sheet button:disabled { opacity: 0.45; filter: none; }
+.sheet button:disabled { opacity: 0.45; }
 .sheet .bar.sending { margin-top: var(--space-4); }
 .sent { display: flex; gap: var(--space-2); align-items: center; margin: var(--space-4) 0 0; }
-.sent svg { color: var(--accent); }
+.sent svg { color: var(--ink); }
 .sheet-foot { display: flex; justify-content: space-between; margin-top: var(--space-6); }
 
 /* Window picker */

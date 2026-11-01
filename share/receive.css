@@ -1,24 +1,24 @@
 :root {
   color-scheme: light dark;
   --surface: oklch(100% 0 0);
-  --canvas: oklch(97% 0.004 265);
-  --line: oklch(90% 0.006 265);
-  --text: oklch(23% 0.012 265);
-  --muted: oklch(50% 0.012 265);
-  --accent: oklch(53% 0.21 268);
-  --accent-text: oklch(99% 0 0);
+  --canvas: oklch(96% 0 0);
+  --line: oklch(89% 0 0);
+  --text: oklch(21% 0 0);
+  --muted: oklch(48% 0 0);
+  --ink: oklch(21% 0 0);
+  --ink-text: oklch(99% 0 0);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --surface: oklch(22% 0.006 265);
-    --canvas: oklch(15% 0.004 265);
-    --line: oklch(33% 0.009 265);
-    --text: oklch(94% 0.004 265);
-    --muted: oklch(72% 0.01 265);
-    --accent: oklch(68% 0.16 268);
-    --accent-text: oklch(16% 0.02 268);
+    --surface: oklch(21% 0 0);
+    --canvas: oklch(14% 0 0);
+    --line: oklch(32% 0 0);
+    --text: oklch(95% 0 0);
+    --muted: oklch(70% 0 0);
+    --ink: oklch(95% 0 0);
+    --ink-text: oklch(18% 0 0);
   }
 }
 
@@ -57,7 +57,7 @@ h1 { margin: 0 0 4px; font-size: 18px; text-wrap: balance; }
 }
 
 .bar { height: 3px; margin-top: 20px; overflow: hidden; border-radius: 2px; background: var(--line); }
-.fill { height: 100%; background: var(--accent); transform: scaleX(0); transform-origin: left; transition: transform 240ms var(--ease-out); }
+.fill { height: 100%; background: var(--ink); transform: scaleX(0); transform-origin: left; transition: transform 240ms var(--ease-out); }
 .result { margin-top: 20px; }
 .result img { display: block; max-width: 100%; height: auto; border-radius: 4px; border: 1px solid var(--line); }
 .actions { margin-top: 16px; }
@@ -68,12 +68,12 @@ h1 { margin: 0 0 4px; font-size: 18px; text-wrap: balance; }
   height: 34px;
   padding: 0 16px;
   border-radius: 8px;
-  background: var(--accent);
-  color: var(--accent-text);
+  background: var(--ink);
+  color: var(--ink-text);
   text-decoration: none;
 }
 
-.download:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.note { margin: 20px 0 0; color: var(--muted); font-size: 12px; }
+.download:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.download:hover { opacity: 0.88; }
 
 @media (prefers-reduced-motion: reduce) { .fill { transition: none; } }
