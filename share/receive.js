@@ -9,8 +9,9 @@ const fill = bar.querySelector('.fill');
 const result = document.querySelector('.result');
 
 const secret = location.hash.slice(1);
-// The key leaves the address bar and this history entry before anything else
-// runs, so it is not left behind in the browser.
+// The key leaves the address bar before anything else runs. The browser's
+// history keeps the visit as it was opened; what protects that copy is that a
+// link stops working once used, stopped or expired.
 history.replaceState(null, '', location.pathname + location.search);
 
 // Tests point the page at a local tracker; real links never carry this.
@@ -42,6 +43,8 @@ if (revisited && !secret) {
     onState(s) {
       if (s.state === 'connecting') {
         status.textContent = 'Connecting to the sender…';
+      } else if (s.state === 'connected') {
+        status.textContent = 'Connected. Waiting for the sender…';
       } else if (s.state === 'approval') {
         code.textContent = s.code;
         codeBlock.hidden = false;
@@ -55,7 +58,7 @@ if (revisited && !secret) {
         const url = URL.createObjectURL(s.blob);
         bar.hidden = true;
         title.textContent = 'Screenshot received';
-        status.textContent = 'It lives only in this tab. Download it to keep it.';
+        status.textContent = `Code ${s.code}. Check the sender saw this code. The image lives only in this tab; download it to keep it.`;
         result.querySelector('img').src = url;
         const link = result.querySelector('.download');
         link.href = url;

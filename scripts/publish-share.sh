@@ -8,7 +8,8 @@ repo=https://github.com/Abhijeet34/pagesnap-share.git
 site=https://abhijeet34.github.io/pagesnap-share/
 root=$(cd "$(dirname "$0")/.." && pwd)
 
-# Publishing only committed files means every live version maps to a commit here.
+# Publishing only committed files means every live version maps to a commit
+# here; uncommitted edits would be silently left out, so they stop the run.
 if [ -n "$(git -C "$root" status --porcelain -- share)" ]; then
   echo "share/ has uncommitted changes; commit them first." >&2
   exit 1
@@ -18,9 +19,10 @@ rev=$(git -C "$root" rev-parse --short HEAD)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 git clone -q --depth 1 "$repo" "$work/repo"
+git -C "$root" archive HEAD share | tar -x -C "$work"
 
 # README.md and .nojekyll belong to the Pages repo, not to share/.
-rsync -a --delete --exclude .git --exclude README.md --exclude .nojekyll "$root/share/" "$work/repo/"
+rsync -a --delete --exclude .git --exclude README.md --exclude .nojekyll "$work/share/" "$work/repo/"
 if [ -z "$(git -C "$work/repo" status --porcelain)" ]; then
   echo "Nothing to push; the repo already matches share/ at $rev."
 else
@@ -35,7 +37,7 @@ echo "Waiting for $site to serve it..."
 tries=0
 while :; do
   stale=
-  for f in "$root"/share/*; do
+  for f in "$work"/share/*; do
     name=$(basename "$f")
     path=$name
     [ "$name" = index.html ] && path=

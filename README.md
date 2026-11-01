@@ -21,10 +21,12 @@ Shots stay in the browser's local storage and are deleted after 24 hours or once
 Share makes a one-time link, like `https://<receiver page>/#<22 characters>`.
 The image goes straight from your open viewer tab to the person who opens it, over an encrypted WebRTC connection; nothing is uploaded or stored anywhere.
 
-- The 128-bit key sits after `#`, which browsers never send to a server. The receiver page removes it from the address bar and history as it loads.
+- The 128-bit key sits after `#`, which browsers never send to a server. The receiver page removes it from the address bar as it loads; the browser's history still records the visit, which is harmless once the link has been used, stopped or expired.
 - Public WebTorrent trackers introduce the two browsers. What passes through them is encrypted and authenticated with the key, so a tracker can neither read it nor put itself in the middle.
 - The image is encrypted with the key as well, on top of WebRTC's DTLS.
-- Both screens show a 4-digit code. Nothing is sent until you check it with the recipient and press Send. A forwarded link gets you a request you can decline.
+- Both screens show a 4-digit code, mixed from both connection fingerprints and a nonce from each side, with the recipient's committed before the sender's is revealed. Someone else holding the link who sits between you therefore matches both codes only by a 1-in-10,000 guess per try, and each try shows you a request.
+- Nothing is sent until you check the code with the recipient and press Send. A forwarded link gets you a request you can decline; several recipients queue and are shown one at a time.
+- The link is the credential: someone else holding it could also pose as the sender. The recipient's page keeps the code on screen with the image, so they can check you saw it.
 - The link works once, for at most 10 minutes, and only while the share dialog is open.
 
 What it cannot hide: the trackers and STUN servers see both IP addresses, the time, and roughly how big the transfer is. A small share of networks block direct connections; without a relay server those transfers fail, and the receiver page says so.

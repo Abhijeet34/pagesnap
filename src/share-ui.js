@@ -42,6 +42,10 @@ export async function setupShare(shot) {
   let session = null;
   let countdown = null;
   let pending = null;
+  // Bumped whenever the dialog ends a share, so a share still starting when
+  // that happens stops itself instead of running behind a closed dialog.
+  let attempt = 0;
+  let starting = false;
 
   const setStatus = (text, { live = false, error = false } = {}) => {
     statusText.textContent = text;
@@ -50,6 +54,7 @@ export async function setupShare(shot) {
   };
 
   function end(note) {
+    attempt++;
     clearInterval(countdown);
     timer.textContent = '';
     session?.stop();
@@ -78,6 +83,15 @@ export async function setupShare(shot) {
       bar.hidden = false;
       fill.style.transform = `scaleX(${s.value})`;
       setStatus(`Sending ${Math.round(s.value * 100)}%`, { live: true });
+    } else if (s.state === 'failed') {
+      end();
+      bar.hidden = true;
+      linkField.value = '';
+      linkField.placeholder = 'Link used';
+      copyLink.disabled = true;
+      stopButton.textContent = 'Done';
+      stopButton.classList.add('finish');
+      setStatus(s.note, { error: true });
     } else if (s.state === 'sent') {
       clearInterval(countdown);
       timer.textContent = '';
@@ -103,13 +117,25 @@ export async function setupShare(shot) {
     stopButton.textContent = 'Stop sharing';
     stopButton.classList.remove('finish');
     setStatus('Connecting…', { live: true });
+    const mine = ++attempt;
+    starting = true;
+    let started;
     try {
-      session = await share({ blob: shot.blob, secret, trackers: config.trackers, iceServers: config.iceServers, onState });
+      started = await share({ blob: shot.blob, secret, trackers: config.trackers, iceServers: config.iceServers, onState: (s) => mine === attempt && onState(s) });
     } catch (e) {
       console.error(e);
-      setStatus(`Sharing could not start: ${e.message}`, { error: true });
+      if (mine === attempt) setStatus(`Sharing could not start: ${e.message}`, { error: true });
+      return;
+    } finally {
+      starting = false;
+    }
+    if (mine !== attempt) {
+      started.stop();
+      // Reopened while this one was starting: that click found it busy.
+      if (sheet.open && !session) start();
       return;
     }
+    session = started;
     const until = Date.now() + EXPIRES_MS;
     const tick = () => {
       const left = Math.max(0, until - Date.now());
@@ -122,7 +148,7 @@ export async function setupShare(shot) {
 
   button.addEventListener('click', () => {
     sheet.showModal();
-    if (!session) start();
+    if (!session && !starting) start();
   });
 
   copyLink.addEventListener('click', async () => {

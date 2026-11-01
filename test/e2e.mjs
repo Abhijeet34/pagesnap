@@ -654,11 +654,21 @@ try {
 
     // Decline: a second link, and the recipient is turned away.
     await evaluate(sender, 'document.querySelector(".sheet .stop").click()');
-    const second = await openReceiver(await openShare());
-    await waitFor(() => evaluate(sender, '!document.querySelector(".request").hidden'), 'second request', 20_000);
+    const secondLink = await openShare();
+    const second = await openReceiver(secondLink);
+    const firstCode = await waitFor(() => evaluate(sender, '!document.querySelector(".request").hidden && document.querySelector(".sheet .code").textContent'), 'second request', 20_000);
+    // A second recipient arriving now must wait its turn, not be dropped.
+    const third = await openReceiver(secondLink);
+    await waitFor(() => evaluate(third, 'document.querySelector(".status")?.textContent.startsWith("Connected")'), 'third connected', 20_000);
+    const secondCode = await evaluate(second, 'document.querySelector(".code").textContent');
+    check('share: the request shows the recipient\'s code', firstCode === secondCode, `${firstCode} / ${secondCode}`);
     await evaluate(sender, 'document.querySelector(".sheet .decline").click()');
     const declined = await waitFor(() => evaluate(second, 'document.querySelector("h1").textContent.includes("declined") && document.querySelector("h1").textContent'), 'declined', 10_000);
     check('share: declined recipient receives nothing', declined && (await evaluate(second, 'document.querySelector(".result").hidden')), declined);
+    const thirdCode = await waitFor(() => evaluate(third, 'document.querySelector(".code").textContent || null'), 'third code', 20_000);
+    const queued = await waitFor(() => evaluate(sender, `!document.querySelector(".request").hidden && document.querySelector(".sheet .code").textContent === ${JSON.stringify(thirdCode)}`), 'queued request', 20_000).catch(() => false);
+    check('share: a recipient who arrived meanwhile is shown next', queued, thirdCode);
+    await evaluate(sender, 'document.querySelector(".sheet .decline").click()');
 
     // Keyless arrivals name their real cause rather than one generic error.
     await evaluate(second, 'location.reload()');
