@@ -37,4 +37,3 @@ A vulnerability is never reported in a pull request or anywhere public.
 
 pagesnap is licensed under the MIT License, and a contribution is accepted under the same licence.
 `LICENSE` holds the full text.
-
