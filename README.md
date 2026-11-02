@@ -3,6 +3,18 @@
 A screenshot extension for Chromium browsers (Brave, Chrome, Edge).
 No dependencies, no build step, no network access.
 
+## Install
+
+```sh
+git clone https://github.com/Abhijeet34/pagesnap.git
+```
+
+1. Open `brave://extensions` (or `chrome://extensions`) and turn on Developer mode.
+2. Click "Load unpacked" and choose this folder.
+3. Pin PageSnap to the toolbar. Change shortcuts at `brave://extensions/shortcuts`.
+
+## Usage: capturing a page
+
 | Option | Shortcut | What you get |
 | --- | --- | --- |
 | Full page | `Alt+Shift+F` | The whole page. It scrolls through once so lazy images load, then renders the document in one pass (the DevTools "Capture full size screenshot" path). App layouts that scroll an inner pane are stitched from that pane instead. |
@@ -35,12 +47,6 @@ The receiver page is `share/` in this repository, a static page with no third-pa
 It is published at `https://abhijeet34.github.io/pagesnap/` by `.github/workflows/pages.yml`, which deploys only `share/` whenever a push to `main` changes it.
 Whoever controls that repository controls the page recipients run, so the account needs two-factor authentication.
 
-## Install
-
-1. Open `brave://extensions` (or `chrome://extensions`) and turn on Developer mode.
-2. Click "Load unpacked" and choose this folder.
-3. Pin PageSnap to the toolbar. Change shortcuts at `brave://extensions/shortcuts`.
-
 ## Limits
 
 - Full page shows the browser's "started debugging this browser" bar for a moment, because it uses the DevTools protocol. If DevTools is already attached to the tab, it falls back to scrolling capture.
@@ -70,6 +76,11 @@ The headed run answers the window picker with a flag that selects the test's own
 
 Interface icons are from [Lucide](https://lucide.dev) 0.460.0, ISC licence (`icons/LUCIDE-LICENSE`).
 
-## License
+## Contributing, security and support
 
-MIT (`LICENSE`).
+[CONTRIBUTING.md](CONTRIBUTING.md) says how a change is proposed, [SECURITY.md](SECURITY.md) how to report a vulnerability privately, and [SUPPORT.md](SUPPORT.md) where each kind of question goes.
+[AGENTS.md](AGENTS.md) holds the build, test and rules a change is held to.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
