@@ -574,7 +574,11 @@ try {
     const actual = await css('[i.getBoundingClientRect().width * devicePixelRatio, document.querySelector(".zoom").getAttribute("aria-pressed")]');
     check('viewer 100%: one image pixel per device pixel', Math.abs(actual[0] - nw) <= 1 && actual[1] === 'true', `${actual[0]} device px for ${nw} px`);
     await evaluate(viewer, 'document.querySelector(".zoom").click()');
-    const fit = await css('[i.getBoundingClientRect().width, document.querySelector(".stage").clientWidth]');
+    // The stage's own box, not clientWidth: at 1.5x it is 1478 device px, or
+    // 985.33 css px, which clientWidth rounds to an integer, 985, just below the image
+    // that exactly fills it. The stage has no side padding, so its box is
+    // the width max-width: 100% resolves against.
+    const fit = await css('[i.getBoundingClientRect().width, document.querySelector(".stage").getBoundingClientRect().width]');
     check('viewer Fit: within the window, never enlarged', fit[0] <= fit[1] && fit[0] * DPR <= nw + 1, `${fit[0]} of ${fit[1]} css px`);
     // A full page is as wide as the window it came from; at Fit it must stay
     // pixel for pixel, since even a 3% shrink resamples and blurs the text.
