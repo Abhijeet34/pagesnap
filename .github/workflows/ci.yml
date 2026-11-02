@@ -1,0 +1,40 @@
+# Runs the end-to-end test on every pull request and on main, at both pixel
+# ratios npm test covers, against the Google Chrome the runner image ships.
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push to the same pull request makes the older run moot.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  e2e:
+    name: e2e (DPR ${{ matrix.dpr }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        dpr: ['2', '1.5']
+    steps:
+      # Pinned to commits: a moved tag cannot change what this runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The test uses the global WebSocket, on by default from Node 22.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: google-chrome --version
+      - run: node test/e2e.mjs
+        env:
+          BROWSER: /usr/bin/google-chrome
+          PAGESNAP_DPR: ${{ matrix.dpr }}
