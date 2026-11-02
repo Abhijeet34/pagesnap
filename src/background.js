@@ -12,6 +12,11 @@ const MAX_FRAMES = 200;
 // Bounds on the lazy-load pass before a full-page render.
 const WARM_STEPS = 60;
 const WARM_SETTLE_MS = 3000;
+// The debugging bar resizes the viewport about 150 ms after attach on Linux;
+// the wait covers a slow machine. It is spent in full when the bar is already
+// up from a capture a moment ago.
+const BAR_WAIT_MS = 1000;
+const BAR_POLL_MS = 50;
 const MODES = ['visible', 'full', 'scroll', 'area', 'window'];
 const EXTENSION_ORIGIN = chrome.runtime.getURL('');
 
@@ -200,11 +205,14 @@ async function captureFull(tab) {
     const target = { tabId: tab.id };
     let attached = false;
     try {
+      const height = await inPage(tab.id, () => visualViewport.height);
       await chrome.debugger.attach(target, '1.3');
       attached = true;
+      const send = (method, params) => chrome.debugger.sendCommand(target, method, params);
+      await waitForDebugBar(send, height);
       await progress(tab, 'Capturing', 0.5);
       shot = await renderFull(
-        (method, params) => chrome.debugger.sendCommand(target, method, params),
+        send,
         probe.dpr,
         (done) => progress(tab, 'Capturing', 0.5 + done * 0.45),
       );
@@ -239,6 +247,22 @@ async function warm(tab) {
     y = pos.top + pos.clientHeight;
   }
   await inPage(tab.id, (ms) => globalThis.__pagesnap.settle(ms), [WARM_SETTLE_MS]);
+}
+
+// Attaching shows the browser's "started debugging" bar, which shrinks the
+// viewport. On macOS that has happened by the time attach returns; on Linux
+// it lands a moment later, and a render begun before it holds the resize off
+// and comes back as the old viewport repeated down the whole page. The
+// viewport still reads its old size afterwards, so the render cannot be
+// checked after the fact; it has to start after the resize. `before` is the
+// height measured before attaching.
+async function waitForDebugBar(send, before) {
+  const end = Date.now() + BAR_WAIT_MS;
+  for (;;) {
+    const { cssVisualViewport: v } = await send('Page.getLayoutMetrics');
+    if (Math.round(v.clientHeight) !== Math.round(before) || Date.now() >= end) return;
+    await sleep(BAR_POLL_MS);
+  }
 }
 
 async function renderFull(send, dpr, onProgress) {
